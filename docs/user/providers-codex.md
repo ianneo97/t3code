@@ -95,7 +95,11 @@ for command and file approvals.
 ## Codex says I hit a usage limit
 
 When Codex stops on a usage limit, the thread names the window that ran out and
-when it resets, when Codex reports them. Send the message again after the reset. On a workspace plan the
+when it resets, when Codex reports them. If you have another signed-in Codex
+account that offers the thread's model and is not out of quota, the notice shows
+**Continue with** that account, with its remaining quota when Codex reports it.
+One click continues the same thread there; accounts that share the thread's
+**CODEX_HOME path** are listed first. Otherwise send the message again after the reset. On a workspace plan the
 message also says whether your workspace owner needs to add credits or raise the
 spend limit to continue sooner.
 

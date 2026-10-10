@@ -72,7 +72,9 @@ over 200,000 tokens. Each Claude provider's settings can override it:
 If your Claude subscription runs out of usage mid-turn, the thread shows which
 limit was reached and the remaining wait when Claude provides a reset time.
 Claude Code holds the turn until that window reopens, so it can keep showing as
-working. Wait for the reset, or stop the turn and continue later. The warning's
+working. Wait for the reset, or stop the turn and continue later. With another
+signed-in Claude instance that offers the thread's model, the notice also shows
+**Continue with** that account. The warning's
 timestamp shows when the displayed wait started.
 
 ## Skills

@@ -1,5 +1,6 @@
 import {
   type EnvironmentId,
+  type ModelSelection,
   type ProviderInteractionMode,
   type RunId,
   type RuntimeMode,
@@ -86,7 +87,8 @@ export function useComposerResume(input: ComposerResumeInput) {
   const isResuming = resumingThreadKeys.has(routeThreadKey);
   const { sendInFlight: sendInFlightRef } = draftSendState(routeThreadKey);
 
-  const onResume = async () => {
+  // `switchTo` moves the thread to another account while it continues.
+  const resumeThread = async (switchTo?: ModelSelection) => {
     if (
       !activeThread ||
       (resumableRunId === null && !hasHeldQueuedRuns) ||
@@ -120,7 +122,8 @@ export function useComposerResume(input: ComposerResumeInput) {
         interactionMode,
       });
       if (settingsResult._tag === "Failure") return settingsResult;
-      const modelSelection = composerRef.current?.getSendContext().selectedModelSelection;
+      const modelSelection =
+        switchTo ?? composerRef.current?.getSendContext().selectedModelSelection;
       const turnResult = await startThreadTurn({
         environmentId,
         input: {
@@ -163,5 +166,7 @@ export function useComposerResume(input: ComposerResumeInput) {
     });
   };
 
-  return { onResume, isResuming };
+  const onResume = () => resumeThread();
+
+  return { onResume, resumeThread, isResuming };
 }

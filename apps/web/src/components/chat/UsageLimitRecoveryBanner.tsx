@@ -3,6 +3,7 @@ import {
   type OrchestrationV2LimitRecoveryUpdate,
   type RunId,
 } from "@t3tools/contracts";
+import type { LimitSwitchTarget } from "@t3tools/client-runtime/state/limit-switch-targets";
 import { GaugeIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "../ui/button";
@@ -16,6 +17,9 @@ type RecoveryProps = {
   snoozedUntil: string | null;
   recovery: OrchestrationV2LimitRecovery | null;
   onChange: (recovery: OrchestrationV2LimitRecoveryUpdate) => Promise<void>;
+  /** Other accounts that can take this thread over now; see `listLimitSwitchTargets`. */
+  switchTargets: ReadonlyArray<LimitSwitchTarget>;
+  onSwitch: (target: LimitSwitchTarget) => Promise<void>;
 };
 
 export function usageLimitRecoveryBannerItem(props: RecoveryProps): ComposerBannerStackItem {
@@ -30,11 +34,23 @@ export function usageLimitRecoveryBannerItem(props: RecoveryProps): ComposerBann
     description: resetAt
       ? `Resets ${new Date(resetAt).toLocaleString()}`
       : "Reset time unavailable; retry manually",
-    actions: canSchedule ? <RecoveryActions key={`${runId}:${resetAt}`} {...props} /> : null,
+    actions:
+      canSchedule || props.switchTargets.length > 0 ? (
+        <RecoveryActions key={`${runId}:${resetAt}`} canSchedule={canSchedule} {...props} />
+      ) : null,
   };
 }
 
-function RecoveryActions({ runId, resetAt, recovery, snoozedUntil, onChange }: RecoveryProps) {
+function RecoveryActions({
+  runId,
+  resetAt,
+  recovery,
+  snoozedUntil,
+  onChange,
+  switchTargets,
+  onSwitch,
+  canSchedule,
+}: RecoveryProps & { canSchedule: boolean }) {
   const [pending, setPending] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
@@ -53,6 +69,19 @@ function RecoveryActions({ runId, resetAt, recovery, snoozedUntil, onChange }: R
     resetAt !== null &&
     snoozedUntil !== null &&
     Date.parse(snoozedUntil) === Date.parse(resetAt);
+  async function run(change: () => Promise<void>, title: string) {
+    setPending(true);
+    try {
+      await change();
+    } catch (cause) {
+      toastManager.add({
+        type: "error",
+        title,
+        description: cause instanceof Error ? cause.message : "An error occurred.",
+      });
+    }
+    setPending(false);
+  }
   async function toggle(action: "resume" | "snooze") {
     if (resetAt === null) return;
     if (action === "snooze" && !snoozed && Date.parse(resetAt) <= Date.now()) {
@@ -64,30 +93,42 @@ function RecoveryActions({ runId, resetAt, recovery, snoozedUntil, onChange }: R
       setNowMs(Date.now());
       return;
     }
-    setPending(true);
-    try {
-      await onChange({
-        runId,
-        resetAt,
-        ...(action === "resume" ? { autoResume: !scheduled } : { snooze: !snoozed }),
-      });
-    } catch (cause) {
-      toastManager.add({
-        type: "error",
-        title: action === "resume" ? "Could not change auto-resume" : "Could not snooze thread",
-        description: cause instanceof Error ? cause.message : "An error occurred.",
-      });
-    }
-    setPending(false);
+    await run(
+      () =>
+        onChange({
+          runId,
+          resetAt,
+          ...(action === "resume" ? { autoResume: !scheduled } : { snooze: !snoozed }),
+        }),
+      action === "resume" ? "Could not change auto-resume" : "Could not snooze thread",
+    );
   }
   // Failures go to a toast: the actions column is auto-sized, so inline error
   // text would widen it and crush the title.
   return (
     <>
-      <Button size="xs" variant="ghost" disabled={pending} onClick={() => void toggle("resume")}>
-        {pending ? "Saving..." : scheduled ? "Cancel auto-resume" : "Resume at reset"}
-      </Button>
-      {!snoozed ? (
+      {switchTargets.map((target) => (
+        <Button
+          key={target.selection.instanceId}
+          size="xs"
+          variant="ghost"
+          disabled={pending}
+          onClick={() =>
+            void run(() => onSwitch(target), `Could not continue with ${target.label}`)
+          }
+        >
+          {`Continue with ${target.label}`}
+          {target.remainingPercent === null
+            ? ""
+            : ` (${Math.round(target.remainingPercent)}% left)`}
+        </Button>
+      ))}
+      {canSchedule ? (
+        <Button size="xs" variant="ghost" disabled={pending} onClick={() => void toggle("resume")}>
+          {pending ? "Saving..." : scheduled ? "Cancel auto-resume" : "Resume at reset"}
+        </Button>
+      ) : null}
+      {canSchedule && !snoozed ? (
         <Button
           size="xs"
           variant="ghost"

@@ -84,6 +84,10 @@ import {
   resolveWorkflowOpening,
   workflowOpeningParentThreadId,
 } from "@t3tools/client-runtime/state/subagentRuntime";
+import {
+  listLimitSwitchTargets,
+  type LimitSwitchTarget,
+} from "@t3tools/client-runtime/state/limit-switch-targets";
 import { threadSupportsProviderHandoff } from "@t3tools/client-runtime/state/thread-workflows";
 import { resolvePendingHandoff } from "@t3tools/client-runtime/handoff";
 import { HandoffRow } from "./chat/V2LifecycleRow";
@@ -2574,6 +2578,31 @@ export default function ChatView(props: ChatViewProps) {
     });
     return item ? [item] : [];
   });
+  const { onResume, resumeThread, isResuming } = useComposerResume({
+    environmentId,
+    routeThreadKey,
+    currentRouteThreadKeyRef,
+    activeThread,
+    resumableRunId,
+    hasHeldQueuedRuns,
+    isSendBusy,
+    isConnecting,
+    isRevertingCheckpoint,
+    threadDetailLoading,
+    activeEnvironmentUnavailable,
+    runtimeMode,
+    interactionMode,
+    localCheckoutBranchMismatch,
+    composerRef,
+    persistThreadSettingsForNextTurn,
+    clearUsageLimitsFor,
+    scrollToEnd,
+    setThreadError,
+  });
+  // Stable: the banner item is built during render, and resumeThread reads refs.
+  const switchFromLimitRecoveryBanner = useStableCallback((target: LimitSwitchTarget) =>
+    resumeThread(target.selection),
+  );
   const limitRecoveryBanner =
     serverRuntime?.status === "failed" &&
     serverRuntime.lastErrorClass === "usage_limit" &&
@@ -2591,6 +2620,12 @@ export default function ChatView(props: ChatViewProps) {
             });
             if (result._tag === "Failure") throw squashAtomCommandFailure(result);
           },
+          switchTargets: listLimitSwitchTargets({
+            providers: providerStatuses,
+            current: activeThreadShell.modelSelection,
+            nowMs: Date.parse(`${nowMinute}:00.000Z`),
+          }),
+          onSwitch: switchFromLimitRecoveryBanner,
         })
       : null;
   const composerBannerItems = (() => {
@@ -2814,27 +2849,6 @@ export default function ChatView(props: ChatViewProps) {
     setPendingServerThreadEnvModeEntry,
     setPendingServerThreadStartFromOriginByThreadId,
     scheduleComposerFocus,
-  });
-  const { onResume, isResuming } = useComposerResume({
-    environmentId,
-    routeThreadKey,
-    currentRouteThreadKeyRef,
-    activeThread,
-    resumableRunId,
-    hasHeldQueuedRuns,
-    isSendBusy,
-    isConnecting,
-    isRevertingCheckpoint,
-    threadDetailLoading,
-    activeEnvironmentUnavailable,
-    runtimeMode,
-    interactionMode,
-    localCheckoutBranchMismatch,
-    composerRef,
-    persistThreadSettingsForNextTurn,
-    clearUsageLimitsFor,
-    scrollToEnd,
-    setThreadError,
   });
   const onImplementPlanInNewThread = useImplementPlanInNewThread({
     environmentId,
