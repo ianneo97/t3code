@@ -51,20 +51,26 @@ function switchTargetLabel(verb: string, target: LimitSwitchTarget): string {
 }
 
 /**
- * Shown before any turn fails: the selected account has used up a window, and
- * a provider that keeps going past its allowance would otherwise never say so.
+ * Shown before any turn fails: the selected account is low on, or out of, a
+ * window, and a provider that keeps going past its allowance would never say so.
  */
 export function limitSwitchBannerItem(
   suggestion: LimitSwitchSuggestion,
   onSwitch: (target: LimitSwitchTarget) => void,
+  onDismiss: (id: string) => void,
 ): ComposerBannerStackItem {
-  const { window, sourceLabel, targets } = suggestion;
+  const { window, sourceLabel, targets, remainingPercent } = suggestion;
+  const usedUp = remainingPercent <= 0;
+  // The level is part of the id, so dismissing the heads-up does not hide "used up".
+  const id = `usage-window:${usedUp ? "used-up" : "low"}:${sourceLabel}:${window.id}:${window.resetsAt ?? ""}`;
   return {
-    id: `usage-window-used-up:${sourceLabel}:${window.id}:${window.resetsAt ?? ""}`,
-    variant: "warning",
+    id,
+    variant: usedUp ? "warning" : "info",
     priority: "notice",
     icon: <GaugeIcon />,
-    title: `${window.label} limit used up on ${sourceLabel}`,
+    title: usedUp
+      ? `${window.label} limit used up on ${sourceLabel}`
+      : `${window.label} limit: ${Math.round(remainingPercent)}% left on ${sourceLabel}`,
     description: window.resetsAt
       ? `Resets ${new Date(window.resetsAt).toLocaleString()}`
       : undefined,
@@ -82,6 +88,8 @@ export function limitSwitchBannerItem(
         ))}
       </div>
     ),
+    dismissLabel: "Dismiss usage limit notice",
+    onDismiss: () => onDismiss(id),
   };
 }
 

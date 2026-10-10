@@ -103,16 +103,21 @@ export function listLimitSwitchTargets(input: {
     .map((candidate) => candidate.target);
 }
 
+/** At or below this headroom the selected account is worth a heads-up. */
+const LOW_REMAINING_PERCENT = 10;
+
 export interface LimitSwitchSuggestion {
   readonly sourceLabel: string;
   readonly window: ServerProviderUsageWindow;
+  /** Headroom left in `window`; 0 once it is used up. */
+  readonly remainingPercent: number;
   readonly targets: ReadonlyArray<LimitSwitchTarget>;
 }
 
 /**
- * Set once the selected account has used up a window and another account can
- * take over. A provider that keeps running past its allowance, as Codex does on
- * credits, never fails the turn, so the window is the only signal.
+ * Set once the selected account is low on, or out of, a window and another
+ * account can take over. A provider that keeps running past its allowance, as
+ * Codex does on credits, never fails the turn, so the window is the only signal.
  */
 export function suggestLimitSwitch(input: {
   readonly providers: ReadonlyArray<ServerProvider>;
@@ -122,10 +127,30 @@ export function suggestLimitSwitch(input: {
   const source = input.providers.find(
     (provider) => provider.instanceId === input.current.instanceId,
   );
-  const window = source ? exhaustedWindow(source, input.nowMs) : undefined;
-  if (!source || !window) return null;
+  if (!source) return null;
+  const window =
+    exhaustedWindow(source, input.nowMs) ??
+    source.usageLimits?.windows
+      .filter(
+        (candidate) =>
+          100 - candidate.usedPercent <= LOW_REMAINING_PERCENT &&
+          (candidate.resetsAt === undefined || Date.parse(candidate.resetsAt) > input.nowMs),
+      )
+      .reduce<ServerProviderUsageWindow | undefined>(
+        (tightest, candidate) =>
+          tightest === undefined || candidate.usedPercent > tightest.usedPercent
+            ? candidate
+            : tightest,
+        undefined,
+      );
+  if (!window) return null;
   const targets = listLimitSwitchTargets(input);
   return targets.length === 0
     ? null
-    : { sourceLabel: resolveProviderInstanceDisplayName(source), window, targets };
+    : {
+        sourceLabel: resolveProviderInstanceDisplayName(source),
+        window,
+        remainingPercent: Math.max(0, 100 - window.usedPercent),
+        targets,
+      };
 }

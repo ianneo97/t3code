@@ -2638,9 +2638,17 @@ export default function ChatView(props: ChatViewProps) {
   const switchFromLimitRecoveryBanner = useStableCallback((target: LimitSwitchTarget) =>
     resumeThread(target.selection),
   );
-  const switchFromLimitSwitchBanner = useStableCallback((target: LimitSwitchTarget) =>
-    onProviderModelSelectStable(target.selection.instanceId, target.selection.model),
-  );
+  const switchFromLimitSwitchBanner = useStableCallback((target: LimitSwitchTarget) => {
+    onProviderModelSelectStable(target.selection.instanceId, target.selection.model);
+    toastManager.add({
+      type: "success",
+      title: `Switched to ${target.label}`,
+      description:
+        target.remainingPercent === null
+          ? "Your next message uses this account."
+          : `Your next message uses this account. ${Math.round(target.remainingPercent)}% of its tightest limit is left.`,
+    });
+  });
   // `nowMinute` is a UTC minute; ranking at that clock keeps render pure.
   const limitSwitchNowMs = Date.parse(`${nowMinute}:00.000Z`);
   const limitRecoveryBanner =
@@ -2668,6 +2676,9 @@ export default function ChatView(props: ChatViewProps) {
           onSwitch: switchFromLimitRecoveryBanner,
         })
       : null;
+  const [dismissedLimitSwitchBannerId, setDismissedLimitSwitchBannerId] = useState<string | null>(
+    null,
+  );
   // The failed-turn banner already offers the same accounts, so this one waits for it to clear.
   const limitSwitchSuggestion =
     limitRecoveryBanner === null && activeThread && activeProviderInstanceId !== null
@@ -2677,10 +2688,18 @@ export default function ChatView(props: ChatViewProps) {
           nowMs: limitSwitchNowMs,
         })
       : null;
-  const limitSwitchBanner =
+  const limitSwitchBannerCandidate =
     limitSwitchSuggestion === null
       ? null
-      : limitSwitchBannerItem(limitSwitchSuggestion, switchFromLimitSwitchBanner);
+      : limitSwitchBannerItem(
+          limitSwitchSuggestion,
+          switchFromLimitSwitchBanner,
+          setDismissedLimitSwitchBannerId,
+        );
+  const limitSwitchBanner =
+    limitSwitchBannerCandidate?.id === dismissedLimitSwitchBannerId
+      ? null
+      : limitSwitchBannerCandidate;
   const composerBannerItems = (() => {
     const limitRecoveryItems = [limitRecoveryBanner, limitSwitchBanner].filter(
       (item) => item !== null,

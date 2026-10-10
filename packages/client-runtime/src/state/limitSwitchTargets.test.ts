@@ -148,15 +148,26 @@ describe("suggestLimitSwitch", () => {
     });
     expect(suggestion?.sourceLabel).toBe("Work");
     expect(suggestion?.window.id).toBe("secondary");
+    expect(suggestion?.remainingPercent).toBe(0);
     expect(suggestion?.targets.map((target) => target.selection.instanceId)).toEqual([
       "codex_personal",
     ]);
   });
 
+  it("gives a heads-up once a window is nearly used up", () => {
+    const suggestion = suggestLimitSwitch({
+      providers: [provider("codex", { usageLimits: usage(93) }), provider("codex_personal")],
+      current,
+      nowMs: NOW,
+    });
+    expect(suggestion?.window.id).toBe("primary");
+    expect(suggestion?.remainingPercent).toBe(7);
+  });
+
   it("stays quiet while the account has allowance left or nobody can take over", () => {
     expect(
       suggestLimitSwitch({
-        providers: [provider("codex", { usageLimits: usage(99) }), provider("codex_personal")],
+        providers: [provider("codex", { usageLimits: usage(89) }), provider("codex_personal")],
         current,
         nowMs: NOW,
       }),
