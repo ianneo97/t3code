@@ -3,7 +3,10 @@ import {
   type OrchestrationV2LimitRecoveryUpdate,
   type RunId,
 } from "@t3tools/contracts";
-import type { LimitSwitchTarget } from "@t3tools/client-runtime/state/limit-switch-targets";
+import type {
+  LimitSwitchSuggestion,
+  LimitSwitchTarget,
+} from "@t3tools/client-runtime/state/limit-switch-targets";
 import { GaugeIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "../ui/button";
@@ -38,6 +41,47 @@ export function usageLimitRecoveryBannerItem(props: RecoveryProps): ComposerBann
       canSchedule || props.switchTargets.length > 0 ? (
         <RecoveryActions key={`${runId}:${resetAt}`} canSchedule={canSchedule} {...props} />
       ) : null,
+  };
+}
+
+function switchTargetLabel(verb: string, target: LimitSwitchTarget): string {
+  const left =
+    target.remainingPercent === null ? "" : ` (${Math.round(target.remainingPercent)}% left)`;
+  return `${verb} ${target.label}${left}`;
+}
+
+/**
+ * Shown before any turn fails: the selected account has used up a window, and
+ * a provider that keeps going past its allowance would otherwise never say so.
+ */
+export function limitSwitchBannerItem(
+  suggestion: LimitSwitchSuggestion,
+  onSwitch: (target: LimitSwitchTarget) => void,
+): ComposerBannerStackItem {
+  const { window, sourceLabel, targets } = suggestion;
+  return {
+    id: `usage-window-used-up:${sourceLabel}:${window.id}:${window.resetsAt ?? ""}`,
+    variant: "warning",
+    priority: "notice",
+    icon: <GaugeIcon />,
+    title: `${window.label} limit used up on ${sourceLabel}`,
+    description: window.resetsAt
+      ? `Resets ${new Date(window.resetsAt).toLocaleString()}`
+      : undefined,
+    actions: (
+      <div className="flex flex-wrap items-center gap-2">
+        {targets.map((target) => (
+          <Button
+            key={target.selection.instanceId}
+            size="xs"
+            variant="ghost"
+            onClick={() => onSwitch(target)}
+          >
+            {switchTargetLabel("Switch to", target)}
+          </Button>
+        ))}
+      </div>
+    ),
   };
 }
 
@@ -117,10 +161,7 @@ function RecoveryActions({
             void run(() => onSwitch(target), `Could not continue with ${target.label}`)
           }
         >
-          {`Continue with ${target.label}`}
-          {target.remainingPercent === null
-            ? ""
-            : ` (${Math.round(target.remainingPercent)}% left)`}
+          {switchTargetLabel("Continue with", target)}
         </Button>
       ))}
       {canSchedule ? (

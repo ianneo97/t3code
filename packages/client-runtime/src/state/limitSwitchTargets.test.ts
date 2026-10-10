@@ -6,7 +6,7 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { listLimitSwitchTargets } from "./limitSwitchTargets.ts";
+import { listLimitSwitchTargets, suggestLimitSwitch } from "./limitSwitchTargets.ts";
 
 const NOW = Date.parse("2026-10-10T12:00:00.000Z");
 
@@ -119,5 +119,54 @@ describe("listLimitSwitchTargets", () => {
         nowMs: NOW,
       }),
     ).toEqual([]);
+  });
+});
+
+describe("suggestLimitSwitch", () => {
+  const weeklyUsedUp: ServerProvider["usageLimits"] = {
+    checkedAt: "2026-10-10T11:59:00.000Z",
+    windows: [
+      { id: "primary", kind: "session", label: "Session", usedPercent: 20 },
+      {
+        id: "secondary",
+        kind: "weekly",
+        label: "Weekly",
+        usedPercent: 100,
+        resetsAt: "2026-10-14T02:00:00.000Z",
+      },
+    ],
+  };
+
+  it("names the used-up window and the accounts that can take over", () => {
+    const suggestion = suggestLimitSwitch({
+      providers: [
+        provider("codex", { displayName: "Work", usageLimits: weeklyUsedUp }),
+        provider("codex_personal"),
+      ],
+      current,
+      nowMs: NOW,
+    });
+    expect(suggestion?.sourceLabel).toBe("Work");
+    expect(suggestion?.window.id).toBe("secondary");
+    expect(suggestion?.targets.map((target) => target.selection.instanceId)).toEqual([
+      "codex_personal",
+    ]);
+  });
+
+  it("stays quiet while the account has allowance left or nobody can take over", () => {
+    expect(
+      suggestLimitSwitch({
+        providers: [provider("codex", { usageLimits: usage(99) }), provider("codex_personal")],
+        current,
+        nowMs: NOW,
+      }),
+    ).toBeNull();
+    expect(
+      suggestLimitSwitch({
+        providers: [provider("codex", { usageLimits: weeklyUsedUp })],
+        current,
+        nowMs: NOW,
+      }),
+    ).toBeNull();
   });
 });

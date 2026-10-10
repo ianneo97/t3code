@@ -19,7 +19,10 @@ import { useComposerResume } from "./chat/useComposerResume";
 import { useImplementPlanInNewThread } from "./chat/useProposedPlanSend";
 import { ThreadFind, ThreadFindCanvas, type ThreadFindControls } from "./chat/ThreadFindProvider";
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
-import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
+import {
+  limitSwitchBannerItem,
+  usageLimitRecoveryBannerItem,
+} from "./chat/UsageLimitRecoveryBanner";
 import { resolveDraftHeroState } from "./ChatView.logic";
 import { useQueuedRunEdit } from "./chat/useQueuedRunEdit";
 import {
@@ -86,6 +89,7 @@ import {
 } from "@t3tools/client-runtime/state/subagentRuntime";
 import {
   listLimitSwitchTargets,
+  suggestLimitSwitch,
   type LimitSwitchTarget,
 } from "@t3tools/client-runtime/state/limit-switch-targets";
 import { threadSupportsProviderHandoff } from "@t3tools/client-runtime/state/thread-workflows";
@@ -2578,6 +2582,37 @@ export default function ChatView(props: ChatViewProps) {
     });
     return item ? [item] : [];
   });
+  const {
+    getModelDisabledReason,
+    handleInteractionModeChange,
+    handleInteractionModeChangeStable,
+    handleRuntimeModeChangeStable,
+    onEnvModeChangeStable,
+    onProviderModelSelectStable,
+    onStartFromOriginChange,
+    openProviderSetupStable,
+    toggleInteractionModeStable,
+  } = useComposerSelection({
+    environmentId,
+    composerDraftTarget,
+    draftThread,
+    activeThread,
+    activeRuntime,
+    activeProjectSettings,
+    settings,
+    providerStatuses,
+    lockedProvider,
+    supportsProviderSwitchingViaHandoff,
+    multipleModelSelections,
+    runtimeMode,
+    interactionMode,
+    interactionModeEnabled,
+    isLocalDraftThread,
+    canOverrideServerThreadEnvMode,
+    setPendingServerThreadEnvModeEntry,
+    setPendingServerThreadStartFromOriginByThreadId,
+    scheduleComposerFocus,
+  });
   const { onResume, resumeThread, isResuming } = useComposerResume({
     environmentId,
     routeThreadKey,
@@ -2599,10 +2634,15 @@ export default function ChatView(props: ChatViewProps) {
     scrollToEnd,
     setThreadError,
   });
-  // Stable: the banner item is built during render, and resumeThread reads refs.
+  // Stable: the banner items are built during render, and these handlers read refs.
   const switchFromLimitRecoveryBanner = useStableCallback((target: LimitSwitchTarget) =>
     resumeThread(target.selection),
   );
+  const switchFromLimitSwitchBanner = useStableCallback((target: LimitSwitchTarget) =>
+    onProviderModelSelectStable(target.selection.instanceId, target.selection.model),
+  );
+  // `nowMinute` is a UTC minute; ranking at that clock keeps render pure.
+  const limitSwitchNowMs = Date.parse(`${nowMinute}:00.000Z`);
   const limitRecoveryBanner =
     serverRuntime?.status === "failed" &&
     serverRuntime.lastErrorClass === "usage_limit" &&
@@ -2623,13 +2663,28 @@ export default function ChatView(props: ChatViewProps) {
           switchTargets: listLimitSwitchTargets({
             providers: providerStatuses,
             current: activeThreadShell.modelSelection,
-            nowMs: Date.parse(`${nowMinute}:00.000Z`),
+            nowMs: limitSwitchNowMs,
           }),
           onSwitch: switchFromLimitRecoveryBanner,
         })
       : null;
+  // The failed-turn banner already offers the same accounts, so this one waits for it to clear.
+  const limitSwitchSuggestion =
+    limitRecoveryBanner === null && activeThread && activeProviderInstanceId !== null
+      ? suggestLimitSwitch({
+          providers: providerStatuses,
+          current: { ...activeThread.modelSelection, instanceId: activeProviderInstanceId },
+          nowMs: limitSwitchNowMs,
+        })
+      : null;
+  const limitSwitchBanner =
+    limitSwitchSuggestion === null
+      ? null
+      : limitSwitchBannerItem(limitSwitchSuggestion, switchFromLimitSwitchBanner);
   const composerBannerItems = (() => {
-    const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
+    const limitRecoveryItems = [limitRecoveryBanner, limitSwitchBanner].filter(
+      (item) => item !== null,
+    );
     const backgroundWorkItems = [childInputBanner, goalBanner, backgroundWorkBanner].filter(
       (item) => item !== null,
     );
@@ -2819,37 +2874,6 @@ export default function ChatView(props: ChatViewProps) {
     void sendStandaloneCommand("/compact", "Failed to compact context.");
   };
 
-  const {
-    getModelDisabledReason,
-    handleInteractionModeChange,
-    handleInteractionModeChangeStable,
-    handleRuntimeModeChangeStable,
-    onEnvModeChangeStable,
-    onProviderModelSelectStable,
-    onStartFromOriginChange,
-    openProviderSetupStable,
-    toggleInteractionModeStable,
-  } = useComposerSelection({
-    environmentId,
-    composerDraftTarget,
-    draftThread,
-    activeThread,
-    activeRuntime,
-    activeProjectSettings,
-    settings,
-    providerStatuses,
-    lockedProvider,
-    supportsProviderSwitchingViaHandoff,
-    multipleModelSelections,
-    runtimeMode,
-    interactionMode,
-    interactionModeEnabled,
-    isLocalDraftThread,
-    canOverrideServerThreadEnvMode,
-    setPendingServerThreadEnvModeEntry,
-    setPendingServerThreadStartFromOriginByThreadId,
-    scheduleComposerFocus,
-  });
   const onImplementPlanInNewThread = useImplementPlanInNewThread({
     environmentId,
     routeThreadKey,
