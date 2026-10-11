@@ -107,6 +107,12 @@ Codex can keep working past a used-up limit by spending ChatGPT credits, so the
 turn never stops. Once the selected account's session or weekly limit is used up,
 the composer shows **Switch to** another signed-in account for your next message.
 
+To make that switch without a click, turn on **Settings → General → Switch account at usage
+limit**. A new turn then starts on another signed-in account of the same provider that offers the
+model, whenever the thread's account has used up a usage window. It applies to messages you send,
+to scheduled tasks, and to turns agents start. A turn that is already running stays on its account.
+When no other account has allowance left, the turn runs where it was.
+
 ## Send feedback to OpenAI
 
 In an existing Codex thread, send `/feedback` with an optional description, for

@@ -488,6 +488,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.enableProviderUpdateChecks !== DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks
       ? ["Provider update checks"]
       : []),
+    ...(settings.switchAccountAtUsageLimit !== DEFAULT_UNIFIED_SETTINGS.switchAccountAtUsageLimit
+      ? ["Switch account at usage limit"]
+      : []),
     ...(settings.continueThreadsAfterServerUpdate !==
     DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate
       ? ["Continue threads after restarts"]
@@ -610,6 +613,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       snoozeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads,
       responseStreamingMode: DEFAULT_UNIFIED_SETTINGS.responseStreamingMode,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
+      switchAccountAtUsageLimit: DEFAULT_UNIFIED_SETTINGS.switchAccountAtUsageLimit,
       continueThreadsAfterServerUpdate: DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate,
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
       backgroundActivityProfile: DEFAULT_UNIFIED_SETTINGS.backgroundActivityProfile,
@@ -1563,6 +1567,36 @@ export function GeneralSettingsPanel() {
                 updateSettings({ enableProviderUpdateChecks: Boolean(checked) })
               }
               aria-label="Check provider versions"
+            />
+          }
+        />
+
+        <SettingsRow
+          serverScoped
+          settingKeys={["switchAccountAtUsageLimit"]}
+          {...searchableSetting("switch-account-at-usage-limit")}
+          description="When an account has used up a usage window, start new turns on another signed-in account of the same provider instead of failing or spending credits."
+          resetAction={
+            settings.switchAccountAtUsageLimit !==
+            DEFAULT_UNIFIED_SETTINGS.switchAccountAtUsageLimit ? (
+              <SettingResetButton
+                label="switch account at usage limit"
+                onClick={() =>
+                  updateSettings({
+                    switchAccountAtUsageLimit: DEFAULT_UNIFIED_SETTINGS.switchAccountAtUsageLimit,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <ScopedSwitch
+              settingKeys={["switchAccountAtUsageLimit"]}
+              checked={settings.switchAccountAtUsageLimit}
+              onCheckedChange={(checked) =>
+                updateSettings({ switchAccountAtUsageLimit: Boolean(checked) })
+              }
+              aria-label="Switch account at usage limit"
             />
           }
         />
