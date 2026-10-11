@@ -1166,6 +1166,45 @@ export default function ChatView(props: ChatViewProps) {
     (providerEnvironmentId === undefined
       ? undefined
       : providersByEnvironment.get(providerEnvironmentId)) ?? EMPTY_PROVIDERS;
+  // The composer keeps the account the user last picked. When a new turn
+  // starts on a different account than that (the server routed it away from a
+  // used-up account, or another client switched the thread), follow that
+  // turn, so the composer does not keep naming an account it is not using.
+  // The run's own selection is the reference: it arrives with the run, while
+  // the thread's saved selection may update a moment later.
+  const latestRunSelection =
+    isServerThread && serverProjection !== null
+      ? (latestExecutedRun(serverProjection.runs) ?? null)
+      : null;
+  const setComposerDraftModelSelection = useComposerDraftStore((store) => store.setModelSelection);
+  const followedRunRef = useRef<{ threadKey: string; runId: string | null } | null>(null);
+  useEffect(() => {
+    const runId = latestRunSelection?.id ?? null;
+    const previous = followedRunRef.current;
+    followedRunRef.current = { threadKey: routeThreadKey, runId };
+    if (
+      latestRunSelection === null ||
+      previous === null ||
+      previous.threadKey !== routeThreadKey ||
+      // Unknown before means the thread was still loading, not that a turn
+      // started: a selection picked but not yet sent must survive a reload.
+      previous.runId === null ||
+      previous.runId === runId ||
+      composerActiveProvider === null ||
+      composerActiveProvider === latestRunSelection.modelSelection.instanceId
+    ) {
+      return;
+    }
+    setComposerDraftModelSelection(composerDraftTarget, latestRunSelection.modelSelection, {
+      explicit: true,
+    });
+  }, [
+    composerActiveProvider,
+    composerDraftTarget,
+    latestRunSelection,
+    routeThreadKey,
+    setComposerDraftModelSelection,
+  ]);
   const selectedProviderByThreadId = composerActiveProvider ?? null;
   const threadProvider =
     activeThread?.modelSelection.instanceId ??
