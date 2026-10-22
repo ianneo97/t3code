@@ -19,6 +19,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
@@ -28,6 +29,7 @@ import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
+import * as ThreadManagementService from "./ThreadManagementService.ts";
 
 const driver = ProviderDriverKind.make("codex");
 const usedUp = ProviderInstanceId.make("codex");
@@ -151,6 +153,63 @@ function makeAdapter(
 }
 
 /**
+ * Two Codex accounts, `usedUp` and `spare`, behind the real orchestrator and
+ * thread management service. `providers` is what the registry reports; tests
+ * change it to model limits moving.
+ */
+const switchHarness = Effect.fn("switchHarness")(function* (input: {
+  readonly name: string;
+  readonly switchAccountAtUsageLimit: boolean;
+}) {
+  const cwd = yield* checkpointWorkspace(input.name);
+  const started: Array<Started> = [];
+  const providers = yield* Ref.make([provider(usedUp, 100), provider(spare, 20)]);
+  const adapters = yield* Effect.forEach([usedUp, spare], (instanceId) =>
+    Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>().pipe(
+      Effect.map((events) => makeAdapter(instanceId, cwd, started, events)),
+    ),
+  );
+  const layerProviderRegistry = Layer.mock(ProviderRegistry.ProviderRegistry)({
+    getProviders: Ref.get(providers),
+  });
+  const layer = ThreadManagementService.layer.pipe(
+    Layer.provide(layerProviderRegistry),
+    Layer.provideMerge(
+      ProviderReplayHarness.layerWithRegistry(
+        { name: input.name },
+        ProviderAdapterRegistry.layerFromAdapters(adapters),
+        {
+          runEffectWorker: false,
+          serverSettings: {
+            switchAccountAtUsageLimit: input.switchAccountAtUsageLimit,
+            providerInstances: { [usedUp]: { driver }, [spare]: { driver } },
+          },
+          providerRegistry: layerProviderRegistry,
+        },
+      ),
+    ),
+  );
+  const createThread = (selection: ModelSelection) =>
+    Orchestrator.OrchestratorV2.use((orchestrator) =>
+      orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("create"),
+        threadId: ThreadId.make(`thread:${input.name}`),
+        projectId: ProjectId.make(`project:${input.name}`),
+        title: "Usage-limit switch",
+        modelSelection: selection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: cwd,
+        createdBy: "user",
+        creationSource: "web",
+      }),
+    ).pipe(Effect.as(ThreadId.make(`thread:${input.name}`)));
+  return { started, providers, layer, createThread };
+});
+
+/**
  * Runs a first turn on `firstOn`, queues a message pinned to the used-up
  * account behind it, ends the first turn with `firstOutcome`, then starts the
  * queued message. Returns the accounts each turn started on and the thread's
@@ -162,46 +221,12 @@ const runQueuedBehindFirstTurn = Effect.fn("runQueuedBehindFirstTurn")(function*
   readonly firstOn: ProviderInstanceId;
   readonly firstOutcome: "completed" | "cancelled";
 }) {
-  const cwd = yield* checkpointWorkspace(input.name);
-  const started: Array<Started> = [];
-  const adapters = yield* Effect.forEach([usedUp, spare], (instanceId) =>
-    Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>().pipe(
-      Effect.map((events) => makeAdapter(instanceId, cwd, started, events)),
-    ),
-  );
-  const layer = ProviderReplayHarness.layerWithRegistry(
-    { name: input.name },
-    ProviderAdapterRegistry.layerFromAdapters(adapters),
-    {
-      runEffectWorker: false,
-      serverSettings: {
-        switchAccountAtUsageLimit: input.switchAccountAtUsageLimit,
-        providerInstances: { [usedUp]: { driver }, [spare]: { driver } },
-      },
-      providerRegistry: Layer.mock(ProviderRegistry.ProviderRegistry)({
-        getProviders: Effect.succeed([provider(usedUp, 100), provider(spare, 20)]),
-      }),
-    },
-  );
+  const { started, layer, createThread } = yield* switchHarness(input);
   return yield* Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
     const sink = yield* EventSink.EventSinkV2;
-    const threadId = ThreadId.make(`thread:${input.name}`);
-    yield* orchestrator.dispatch({
-      type: "thread.create",
-      commandId: CommandId.make("create"),
-      threadId,
-      projectId: ProjectId.make(`project:${input.name}`),
-      title: "Queued behind a turn",
-      modelSelection: on(input.firstOn),
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      branch: null,
-      worktreePath: cwd,
-      createdBy: "user",
-      creationSource: "web",
-    });
+    const threadId = yield* createThread(on(input.firstOn));
     const running = yield* orchestrator.streamDomainEvents.pipe(
       Stream.filter(
         (event) => event.type === "provider-turn.updated" && event.payload.status === "running",
@@ -336,4 +361,74 @@ it.effect(
         assert.equal(result.threadInstance, spare);
       }),
     ),
+);
+
+const freshTurn = (threadId: ThreadId) =>
+  ({
+    type: "message.dispatch",
+    commandId: CommandId.make("fresh"),
+    threadId,
+    messageId: MessageId.make("message:fresh"),
+    text: "fresh",
+    attachments: [],
+    modelSelection: on(usedUp),
+    dispatchMode: { type: "start_immediately" },
+    createdBy: "user",
+    creationSource: "web",
+  }) as const;
+
+it.effect.each([
+  { switchAccountAtUsageLimit: true, startsOn: spare },
+  { switchAccountAtUsageLimit: false, startsOn: usedUp },
+])(
+  "hands a fresh turn on a used-up account to the orchestrator on the account that takes over (switch on: $switchAccountAtUsageLimit)",
+  ({ switchAccountAtUsageLimit, startsOn }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { started, layer, createThread } = yield* switchHarness({
+          name: `fresh-turn-limit-switch-${switchAccountAtUsageLimit ? "on" : "off"}`,
+          switchAccountAtUsageLimit,
+        });
+        yield* Effect.gen(function* () {
+          const threads = yield* ThreadManagementService.ThreadManagementService;
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const threadId = yield* createThread(on(usedUp));
+          yield* threads.dispatch(freshTurn(threadId));
+          yield* worker.drain();
+          const after = yield* orchestrator.getThreadProjection(threadId);
+          assert.deepEqual(started, [{ instanceId: startsOn, text: "fresh" }]);
+          assert.equal(after.runs[0]?.providerInstanceId, startsOn);
+          assert.equal(after.thread.modelSelection.instanceId, startsOn);
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
+);
+
+it.effect("replays a retried fresh turn's first result even after the limits moved", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { started, providers, layer, createThread } = yield* switchHarness({
+        name: "fresh-turn-limit-switch-retry",
+        switchAccountAtUsageLimit: true,
+      });
+      yield* Effect.gen(function* () {
+        const threads = yield* ThreadManagementService.ThreadManagementService;
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const threadId = yield* createThread(on(usedUp));
+        const first = yield* threads.dispatch(freshTurn(threadId));
+        yield* worker.drain();
+        // Now the switch would leave the retry where it was sent.
+        yield* Ref.set(providers, [provider(usedUp, 10), provider(spare, 100)]);
+        const retried = yield* threads.dispatch(freshTurn(threadId));
+        yield* worker.drain();
+        const after = yield* orchestrator.getThreadProjection(threadId);
+        assert.deepEqual(retried, first);
+        assert.deepEqual(started, [{ instanceId: spare, text: "fresh" }]);
+        assert.lengthOf(after.runs, 1);
+        assert.equal(after.thread.modelSelection.instanceId, spare);
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
 );
