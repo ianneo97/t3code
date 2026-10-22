@@ -37,6 +37,7 @@ import * as ProjectionStore from "../ProjectionStore.ts";
 import * as ProjectStore from "../ProjectStore.ts";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
 import * as ProviderAuthService from "../../provider/ProviderAuthService.ts";
+import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
 import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import * as ProviderContinuationService from "../ProviderContinuationService.ts";
 import * as ProviderEventIngestor from "../ProviderEventIngestor.ts";
@@ -270,6 +271,9 @@ export function layerWithRegistry<Error>(
     readonly runContinuationWorker?: boolean;
     readonly recoverOnStartup?: boolean;
     readonly continueThreadsAfterServerUpdate?: boolean;
+    readonly serverSettings?: Parameters<typeof ServerSettings.layerTest>[0];
+    /** Without it the orchestrator has no provider snapshot, so a queued run keeps its account. */
+    readonly providerRegistry?: Layer.Layer<ProviderRegistry.ProviderRegistry>;
   } = {},
 ): Layer.Layer<
   | Orchestrator.OrchestratorV2
@@ -302,7 +306,9 @@ export function layerWithRegistry<Error>(
     ...(options.continueThreadsAfterServerUpdate === undefined
       ? {}
       : { continueThreadsAfterServerUpdate: options.continueThreadsAfterServerUpdate }),
+    ...options.serverSettings,
   }).pipe(Layer.orDie);
+  const layerProviderRegistry = options.providerRegistry ?? Layer.empty;
   const layerStores = Layer.mergeAll(
     EventStore.layer,
     ProjectionStore.layer,
@@ -462,6 +468,7 @@ export function layerWithRegistry<Error>(
         layerRunExecutionServiceProvided,
         layerServerSettings,
         ThreadForkService.layer,
+        layerProviderRegistry,
       ),
     ),
   );

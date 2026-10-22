@@ -10,6 +10,7 @@ import {
 
 import {
   limitAccountSwitchSelection,
+  queuedRunLimitSwitchSelection,
   type LimitAccountSwitchCommand,
 } from "./LimitAccountSwitch.ts";
 
@@ -98,22 +99,62 @@ describe("limitAccountSwitchSelection", () => {
 
   it("leaves work alone that belongs to a run already under way", () => {
     const runId = RunId.make("run:test");
-    const cases: ReadonlyArray<[Partial<LimitAccountSwitchCommand>, RunId | null]> = [
-      [{}, runId],
-      [{ dispatchMode: { type: "steer_active", targetRunId: runId } }, null],
-      [{ dispatchMode: { type: "restart_active", targetRunId: runId } }, null],
-      [{ deliveryIntent: "steer" }, null],
-      [{ restartContinuationOfRunId: runId }, null],
-      [{ delegatedCompletion: { parentRunId: runId, generation: 1, taskIds: [] } }, null],
+    const cases: ReadonlyArray<Partial<LimitAccountSwitchCommand>> = [
+      { dispatchMode: { type: "steer_active", targetRunId: runId } },
+      { dispatchMode: { type: "restart_active", targetRunId: runId } },
+      { deliveryIntent: "steer" },
+      { restartContinuationOfRunId: runId },
+      { delegatedCompletion: { parentRunId: runId, generation: 1, taskIds: [] } },
     ];
-    for (const [overrides, activeRunId] of cases) {
+    for (const overrides of cases) {
       expect(
         limitAccountSwitchSelection({
           command: command(overrides),
-          thread: { ...idle, activeRunId },
+          thread: idle,
           settings,
           providers,
           nowMs: NOW,
+        }),
+      ).toBeNull();
+    }
+  });
+
+  it("decides a message queued behind a run when it starts, not when it is queued", () => {
+    const snapshot = { settings, providers, nowMs: NOW };
+    expect(
+      limitAccountSwitchSelection({
+        ...snapshot,
+        command: command({ dispatchMode: { type: "queue_after_active" } }),
+        thread: { ...idle, activeRunId: RunId.make("run:active") },
+      }),
+    ).toBeNull();
+    expect(
+      queuedRunLimitSwitchSelection({
+        ...snapshot,
+        run: {},
+        creationSource: "web",
+        current: usedUp,
+        projectId: PROJECT,
+      }),
+    ).toEqual({ instanceId: "codex_personal", model: "gpt-6" });
+    const runId = RunId.make("run:test");
+    const keptOnTheirAccount: ReadonlyArray<
+      Pick<Parameters<typeof queuedRunLimitSwitchSelection>[0], "run" | "creationSource">
+    > = [
+      { run: { restartContinuationOfRunId: runId }, creationSource: "web" },
+      {
+        run: { delegatedCompletion: { disposition: "open", nextGeneration: 1, delivery: null } },
+        creationSource: "server",
+      },
+      { run: {}, creationSource: "provider" },
+    ];
+    for (const queued of keptOnTheirAccount) {
+      expect(
+        queuedRunLimitSwitchSelection({
+          ...snapshot,
+          ...queued,
+          current: usedUp,
+          projectId: PROJECT,
         }),
       ).toBeNull();
     }

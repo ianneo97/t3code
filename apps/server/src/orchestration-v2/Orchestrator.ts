@@ -68,6 +68,7 @@ import {
   derivePendingBackgroundWork,
   pendingBackgroundTurnItems,
 } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -146,6 +147,8 @@ import {
 import { planThreadDeletion } from "./ThreadDeletion.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ServerSettings from "../serverSettings.ts";
+import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+import { queuedRunLimitSwitchSelection } from "./LimitAccountSwitch.ts";
 
 export class OrchestratorDispatchError extends Schema.TaggedError<OrchestratorDispatchError>()(
   "OrchestratorDispatchError",
@@ -929,6 +932,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const providerSessions = yield* ProviderSessionManagerV2;
   const providerSwitchService = yield* ProviderSwitchServiceV2;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
+  // Optional, so harnesses that build the orchestrator without providers still work.
+  const providerRegistry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
   const runtimePolicy = yield* RuntimePolicyV2;
   const threadForkService = yield* ThreadForkServiceV2;
   const threadDispatch = yield* ThreadCommandExecutor.ThreadCommandExecutor;
@@ -1418,7 +1423,31 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const queuedMessage = projection.messages.find(
         (candidate) => candidate.id === storedQueuedRun.userMessageId,
       );
-      const modelSelection = queuedRunModelSelection(projection, storedQueuedRun);
+      const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
+      const pinnedSelection = queuedRunModelSelection(projection, storedQueuedRun);
+      // The same decision as a fresh turn, made now: the account it was queued
+      // on may have run out while it waited.
+      const switchedSelection =
+        settings.switchAccountAtUsageLimit && Option.isSome(providerRegistry)
+          ? queuedRunLimitSwitchSelection({
+              run: storedQueuedRun,
+              creationSource: queuedMessage?.creationSource,
+              current: pinnedSelection,
+              projectId: projection.thread.projectId,
+              settings,
+              providers: yield* providerRegistry.value.getProviders,
+              nowMs: yield* Clock.currentTimeMillis,
+            })
+          : null;
+      if (switchedSelection !== null) {
+        yield* Effect.logInfo("Starting the queued turn on another account: usage limit reached", {
+          threadId,
+          runId: storedQueuedRun.id,
+          from: pinnedSelection.instanceId,
+          to: switchedSelection.instanceId,
+        });
+      }
+      const modelSelection = switchedSelection ?? pinnedSelection;
       const queuedRun = {
         ...storedQueuedRun,
         modelSelection,
@@ -1439,7 +1468,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         failedRun?.id === options?.endedRunId &&
         failedRun?.workspacePreparation?.type === "worktree" &&
         projection.thread.worktreePath === null;
-      const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
       const projectOverride =
         settings.projectSettingsOverrides[projection.thread.projectId]?.providerInstances?.[
           queuedRun.providerInstanceId

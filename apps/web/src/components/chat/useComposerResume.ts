@@ -91,7 +91,7 @@ export function useComposerResume(input: ComposerResumeInput) {
   const resumeThread = async (switchTo?: ModelSelection) => {
     if (
       !activeThread ||
-      (resumableRunId === null && !hasHeldQueuedRuns) ||
+      (resumableRunId === null && (!hasHeldQueuedRuns || switchTo !== undefined)) ||
       isSendBusy ||
       isResuming ||
       isConnecting ||
@@ -141,7 +141,12 @@ export function useComposerResume(input: ComposerResumeInput) {
           dispatchMode: "start",
         },
       });
-      if (turnResult._tag === "Failure" || !hasHeldQueuedRuns) return turnResult;
+      // Queued messages keep the account they were queued on, so releasing them
+      // after a switch would send them back to the used-up one. They stay held;
+      // with "Switch account at usage limit" on, the server moves each as it starts.
+      if (turnResult._tag === "Failure" || !hasHeldQueuedRuns || switchTo !== undefined) {
+        return turnResult;
+      }
       clearUsageLimitsFor(routeThreadKey);
       return resumeThreadQueue({ environmentId, input: { threadId } });
     };
