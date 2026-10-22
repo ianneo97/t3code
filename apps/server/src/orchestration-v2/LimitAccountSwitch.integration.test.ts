@@ -9,6 +9,7 @@ import {
   ProviderThreadId,
   ProviderTurnId,
   ThreadId,
+  TurnItemId,
   type ModelSelection,
   type ServerProvider,
 } from "@t3tools/contracts";
@@ -65,7 +66,14 @@ function provider(instanceId: ProviderInstanceId, weeklyUsed: number): ServerPro
   };
 }
 
-type Started = { readonly instanceId: ProviderInstanceId; readonly text: string };
+type Started = {
+  readonly instanceId: ProviderInstanceId;
+  readonly text: string;
+  /** The turn opened with context handed over from another provider thread. */
+  readonly withContext?: true;
+};
+// How turn start puts handed-over context ahead of the user's text.
+const userMessageMarker = "\n\nUser message:\n";
 
 function makeAdapter(
   instanceId: ProviderInstanceId,
@@ -120,7 +128,17 @@ function makeAdapter(
           resumeThread: ({ providerThread }) => Effect.succeed(providerThread),
           startTurn: (turn) =>
             Effect.gen(function* () {
-              started.push({ instanceId, text: turn.message.text });
+              const { text } = turn.message;
+              const userMessageAt = text.lastIndexOf(userMessageMarker);
+              started.push(
+                userMessageAt === -1
+                  ? { instanceId, text }
+                  : {
+                      instanceId,
+                      text: text.slice(userMessageAt + userMessageMarker.length),
+                      withContext: true,
+                    },
+              );
               yield* Queue.offer(events, {
                 type: "provider_turn.updated",
                 driver,
@@ -211,15 +229,17 @@ const switchHarness = Effect.fn("switchHarness")(function* (input: {
 
 /**
  * Runs a first turn on `firstOn`, queues a message pinned to the used-up
- * account behind it, ends the first turn with `firstOutcome`, then starts the
- * queued message. Returns the accounts each turn started on and the thread's
- * account afterwards.
+ * account behind it, ends the first turn with `firstOutcome`, optionally runs a
+ * "Continue with" turn on `continueOn`, then sends the held queued message now.
+ * Returns the accounts each turn started on and the thread afterwards.
  */
 const runQueuedBehindFirstTurn = Effect.fn("runQueuedBehindFirstTurn")(function* (input: {
   readonly name: string;
   readonly switchAccountAtUsageLimit: boolean;
   readonly firstOn: ProviderInstanceId;
-  readonly firstOutcome: "completed" | "cancelled";
+  /** `usage_limit`: the first turn fails on its account's plan limit. */
+  readonly firstOutcome: "completed" | "cancelled" | "usage_limit";
+  readonly continueOn?: ProviderInstanceId;
 }) {
   const { started, layer, createThread } = yield* switchHarness(input);
   return yield* Effect.gen(function* () {
@@ -227,29 +247,107 @@ const runQueuedBehindFirstTurn = Effect.fn("runQueuedBehindFirstTurn")(function*
     const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
     const sink = yield* EventSink.EventSinkV2;
     const threadId = yield* createThread(on(input.firstOn));
-    const running = yield* orchestrator.streamDomainEvents.pipe(
-      Stream.filter(
-        (event) => event.type === "provider-turn.updated" && event.payload.status === "running",
-      ),
-      Stream.take(1),
-      Stream.runDrain,
-      Effect.forkScoped,
-    );
-    // Straight to the orchestrator: the first turn runs where it is told.
-    yield* orchestrator.dispatch({
-      type: "message.dispatch",
-      commandId: CommandId.make("first"),
-      threadId,
-      messageId: MessageId.make("message:first"),
-      text: "first",
-      attachments: [],
-      modelSelection: on(input.firstOn),
-      dispatchMode: { type: "start_immediately" },
-      createdBy: "user",
-      creationSource: "web",
+    // Straight to the orchestrator: these turns run where they are told.
+    const runTurn = Effect.fn("runTurn")(function* (text: string, selection: ModelSelection) {
+      const running = yield* orchestrator.streamDomainEvents.pipe(
+        Stream.filter(
+          (event) => event.type === "provider-turn.updated" && event.payload.status === "running",
+        ),
+        Stream.take(1),
+        Stream.runDrain,
+        Effect.forkScoped,
+      );
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(text),
+        threadId,
+        messageId: MessageId.make(`message:${text}`),
+        text,
+        attachments: [],
+        modelSelection: selection,
+        dispatchMode: { type: "start_immediately" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* worker.drain();
+      yield* Fiber.join(running);
     });
-    yield* worker.drain();
-    yield* Fiber.join(running);
+    // Ends the running turn and holds the queue, so the start below is the only one.
+    const endRunningTurn = Effect.fn("endRunningTurn")(function* (
+      outcome: "completed" | "cancelled" | "usage_limit",
+    ) {
+      const before = yield* orchestrator.getThreadProjection(threadId);
+      const now = yield* DateTime.now;
+      const status = outcome === "usage_limit" ? ("failed" as const) : outcome;
+      const runningRuns = before.runs.filter(
+        (run) => run.status === "starting" || run.status === "running",
+      );
+      yield* sink.write({
+        events: [
+          ...(outcome === "usage_limit"
+            ? runningRuns.map((run) => ({
+                id: EventId.make(`limit:${run.id}`),
+                type: "turn-item.updated" as const,
+                threadId,
+                runId: run.id,
+                occurredAt: now,
+                payload: {
+                  id: TurnItemId.make(`limit:${run.id}`),
+                  threadId,
+                  runId: run.id,
+                  nodeId: run.rootNodeId,
+                  providerThreadId: run.providerThreadId,
+                  providerTurnId: null,
+                  nativeItemRef: null,
+                  parentItemId: null,
+                  ordinal: run.ordinal * 100 + 1,
+                  status: "failed" as const,
+                  title: "Usage limit reached",
+                  startedAt: now,
+                  completedAt: now,
+                  updatedAt: now,
+                  type: "error" as const,
+                  failure: {
+                    class: "usage_limit" as const,
+                    message: "Plan limit reached.",
+                    resetAt: "2999-01-01T00:00:00.000Z",
+                    code: "usageLimitExceeded",
+                    retryable: null,
+                  },
+                },
+              }))
+            : []),
+          ...runningRuns.map((run) => ({
+            id: EventId.make(`end:${run.id}`),
+            type: "run.updated" as const,
+            threadId,
+            runId: run.id,
+            occurredAt: now,
+            payload: { ...run, status, completedAt: now },
+          })),
+          ...before.runs
+            .filter((run) => run.status === "queued")
+            .map((run) => ({
+              id: EventId.make(`hold:${run.id}:${before.runs.length}`),
+              type: "run.updated" as const,
+              threadId,
+              runId: run.id,
+              occurredAt: now,
+              payload: { ...run, queueHeld: true },
+            })),
+          ...before.providerTurns
+            .filter((turn) => turn.status === "running")
+            .map((turn) => ({
+              id: EventId.make(`end:${turn.id}`),
+              type: "provider-turn.updated" as const,
+              threadId,
+              occurredAt: now,
+              payload: { ...turn, status, completedAt: now },
+            })),
+        ],
+      });
+    });
+    yield* runTurn("first", on(input.firstOn));
     yield* orchestrator.dispatch({
       type: "message.dispatch",
       commandId: CommandId.make("queued"),
@@ -262,34 +360,17 @@ const runQueuedBehindFirstTurn = Effect.fn("runQueuedBehindFirstTurn")(function*
       createdBy: "user",
       creationSource: "web",
     });
-    const before = yield* orchestrator.getThreadProjection(threadId);
-    const queued = before.runs.find((run) => run.status === "queued");
+    const queued = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+      (run) => run.status === "queued",
+    );
     if (queued === undefined) return yield* Effect.die("the message was not queued");
     assert.equal(queued.providerInstanceId, usedUp);
-    const now = yield* DateTime.now;
-    // End the first turn and hold the queue, so the start below is the only one.
-    yield* sink.write({
-      events: [
-        ...before.runs.map((run) => ({
-          id: EventId.make(`end:${run.id}`),
-          type: "run.updated" as const,
-          threadId,
-          runId: run.id,
-          occurredAt: now,
-          payload:
-            run.status === "queued"
-              ? { ...run, queueHeld: true }
-              : { ...run, status: input.firstOutcome, completedAt: now },
-        })),
-        ...before.providerTurns.map((turn) => ({
-          id: EventId.make(`end:${turn.id}`),
-          type: "provider-turn.updated" as const,
-          threadId,
-          occurredAt: now,
-          payload: { ...turn, status: input.firstOutcome, completedAt: now },
-        })),
-      ],
-    });
+    yield* endRunningTurn(input.firstOutcome);
+    if (input.continueOn !== undefined) {
+      yield* runTurn("continue", on(input.continueOn));
+      yield* endRunningTurn("completed");
+    }
+    // "Send now" on the held message.
     yield* orchestrator.dispatch({
       type: "queued-run.start",
       commandId: CommandId.make("start-queued"),
@@ -298,13 +379,54 @@ const runQueuedBehindFirstTurn = Effect.fn("runQueuedBehindFirstTurn")(function*
     });
     yield* worker.drain();
     const after = yield* orchestrator.getThreadProjection(threadId);
+    const queuedRun = after.runs.find((run) => run.id === queued.id);
+    const firstRun = after.runs.find(
+      (run) => run.userMessageId === MessageId.make("message:first"),
+    );
+    const queuedProviderThread = after.providerThreads.find(
+      (candidate) => candidate.id === queuedRun?.providerThreadId,
+    );
+    const handoff = after.contextHandoffs.find(
+      (candidate) => candidate.id === queuedRun?.contextHandoffId,
+    );
     return {
       started,
-      queuedRun: after.runs.find((run) => run.id === queued.id),
+      queuedRun,
       threadInstance: after.thread.modelSelection.instanceId,
+      /** Who really took the queued turn, and what became of the first turn's provider thread. */
+      delivery: {
+        providerThreadInstance: queuedProviderThread?.providerInstanceId,
+        sessionInstance: after.providerSessions.find(
+          (session) => session.id === queuedProviderThread?.providerSessionId,
+        )?.providerInstanceId,
+        reusesFirstProviderThread: queuedRun?.providerThreadId === firstRun?.providerThreadId,
+        firstProviderThreadInstance: after.providerThreads.find(
+          (candidate) => candidate.id === firstRun?.providerThreadId,
+        )?.providerInstanceId,
+      },
+      handoff: handoff && {
+        fromFirstTurn:
+          handoff.fromProviderThreadIds.length === 1 &&
+          handoff.fromProviderThreadIds[0] === firstRun?.providerThreadId,
+        toQueuedTurn:
+          handoff.targetRunId === queuedRun?.id &&
+          handoff.toProviderThreadId === queuedRun?.providerThreadId,
+      },
+      continueRun: after.runs.find(
+        (run) => run.userMessageId === MessageId.make("message:continue"),
+      ),
     };
   }).pipe(Effect.provide(layer));
 });
+
+const movedToSpare = {
+  providerThreadInstance: spare,
+  sessionInstance: spare,
+  reusesFirstProviderThread: false,
+  firstProviderThreadInstance: usedUp,
+};
+// What a provider switch hands the turn that moves off the first turn's provider thread.
+const handedOffFromFirstTurn = { fromFirstTurn: true, toQueuedTurn: true };
 
 it.effect("starts a queued message on another account when its own has used up a limit", () =>
   Effect.scoped(
@@ -313,16 +435,56 @@ it.effect("starts a queued message on another account when its own has used up a
         name: "queued-limit-switch-on",
         switchAccountAtUsageLimit: true,
         firstOn: usedUp,
-        firstOutcome: "cancelled",
+        firstOutcome: "completed",
       });
-      assert.deepEqual(result.started, [
-        { instanceId: usedUp, text: "first" },
-        { instanceId: spare, text: "queued" },
-      ]);
+      assert.deepEqual(
+        { started: result.started, delivery: result.delivery, handoff: result.handoff },
+        {
+          started: [
+            { instanceId: usedUp, text: "first" },
+            { instanceId: spare, text: "queued", withContext: true },
+          ],
+          delivery: movedToSpare,
+          handoff: handedOffFromFirstTurn,
+        },
+      );
       assert.equal(result.queuedRun?.providerInstanceId, spare);
       assert.equal(result.threadInstance, spare);
     }),
   ),
+);
+
+it.effect(
+  'starts a held message on the conversation that "Continue with" moved to another account',
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const result = yield* runQueuedBehindFirstTurn({
+          name: "queued-limit-switch-after-continue",
+          switchAccountAtUsageLimit: true,
+          firstOn: usedUp,
+          firstOutcome: "usage_limit",
+          continueOn: spare,
+        });
+        assert.deepEqual(
+          {
+            started: result.started,
+            delivery: result.delivery,
+            joinsContinueTurn:
+              result.queuedRun?.providerThreadId === result.continueRun?.providerThreadId,
+          },
+          {
+            started: [
+              { instanceId: usedUp, text: "first" },
+              { instanceId: spare, text: "continue", withContext: true },
+              { instanceId: spare, text: "queued" },
+            ],
+            delivery: movedToSpare,
+            joinsContinueTurn: true,
+          },
+        );
+      }),
+    ),
 );
 
 it.effect("starts a queued message on its own account while the switch is off", () =>
@@ -359,6 +521,13 @@ it.effect(
           { instanceId: spare, text: "queued" },
         ]);
         assert.equal(result.threadInstance, spare);
+        // The conversation the first turn had on that account, not a new one without it.
+        assert.deepEqual(result.delivery, {
+          providerThreadInstance: spare,
+          sessionInstance: spare,
+          reusesFirstProviderThread: true,
+          firstProviderThreadInstance: spare,
+        });
       }),
     ),
 );

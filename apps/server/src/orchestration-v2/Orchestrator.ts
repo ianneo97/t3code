@@ -1575,7 +1575,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const activeProviderThread = projection.providerThreads.find(
         (candidate) => candidate.id === projection.thread.activeProviderThreadId,
       );
-      const followsCurrent = followsCurrentConversation(queuedMessage);
+      // A run the usage-limit switch moved off the account it was queued on
+      // leaves that account's provider thread and session behind and joins the
+      // conversation where it is now, through the same switch a fresh turn gets.
+      const followsCurrent =
+        followsCurrentConversation(queuedMessage) ||
+        storedProviderThread.providerInstanceId !== queuedRun.providerInstanceId;
       const targetProviderThread = followsCurrent
         ? activeProviderThread?.providerInstanceId === queuedRun.providerInstanceId
           ? activeProviderThread
@@ -1843,6 +1848,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ),
         updatedAt: now,
       };
+      // Delivered to another instance's provider thread or session, the turn
+      // runs in that account's CLI and on its plan while the run says otherwise.
+      const sessionInstanceId = projection.providerSessions.find(
+        (session) => session.id === providerSessionId,
+      )?.providerInstanceId;
+      if (
+        providerThread.providerInstanceId !== queuedRun.providerInstanceId ||
+        (sessionInstanceId !== undefined && sessionInstanceId !== queuedRun.providerInstanceId)
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId,
+          commandType: "message.dispatch",
+          cause: `Queued run ${queuedRun.id} on ${queuedRun.providerInstanceId} would be delivered to provider thread ${providerThread.id} of ${providerThread.providerInstanceId} and session ${providerSessionId} of ${sessionInstanceId ?? "no recorded instance"}.`,
+        });
+      }
       const startingRun: OrchestrationV2Run = {
         ...queuedRun,
         providerThreadId: queuedProviderThread.id,
