@@ -31,6 +31,7 @@ import {
   type ModelSelection,
   type OrchestrationMessageContext,
   type OrchestrationV2ProjectedTurnItem,
+  type OrchestrationV2Run,
   type PreviewAnnotationPayload,
   type ProviderInteractionMode,
   ProviderDriverKind,
@@ -980,6 +981,43 @@ export function threadShellHasStarted(
     shell &&
     (shell.latestRun !== null || shell.latestUserMessageAt !== null || shell.runtime !== null),
   );
+}
+
+/** A turn this composer sent, with the account it was sent on. */
+export interface ComposerOwnSend {
+  readonly messageId: MessageId;
+  readonly instanceId: ProviderInstanceId;
+}
+
+/**
+ * What the composer does about its own last send. Once the server starts it,
+ * the composer takes on the account the turn runs on when the server moved it
+ * (off a used-up account), so it stops naming an account it is not using. Runs
+ * from any other source never touch the composer, and neither does this one
+ * when the user picked another account after sending: a manual pick wins.
+ */
+export function composerOwnSendOutcome(input: {
+  readonly ownSend: ComposerOwnSend;
+  readonly runs: ReadonlyArray<
+    Pick<OrchestrationV2Run, "userMessageId" | "status" | "modelSelection">
+  >;
+  readonly composerInstanceId: ProviderInstanceId | null;
+}):
+  | { readonly kind: "waiting" }
+  | { readonly kind: "started"; readonly follow: ModelSelection | null } {
+  const { ownSend } = input;
+  const run = input.runs.find(
+    (candidate) => candidate.userMessageId === ownSend.messageId && candidate.status !== "queued",
+  );
+  if (run === undefined) return { kind: "waiting" };
+  return {
+    kind: "started",
+    follow:
+      run.modelSelection.instanceId !== ownSend.instanceId &&
+      input.composerInstanceId === ownSend.instanceId
+        ? run.modelSelection
+        : null,
+  };
 }
 
 // Imported history has no session until its first prompt. Resolve its instance

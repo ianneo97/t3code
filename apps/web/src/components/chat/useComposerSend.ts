@@ -20,6 +20,7 @@ import {
   AuthOrchestrationOperateScope,
   DEFAULT_MODEL,
   type EnvironmentId,
+  type MessageId,
   type ModelSelection,
   type PreviewAnnotationPayload,
   type ThreadId,
@@ -237,6 +238,11 @@ interface ComposerSendInput {
     runtimeMode: RuntimeMode;
     interactionMode: ProviderInteractionMode;
   }) => Promise<AtomCommandResult<void, unknown>>;
+  /** A turn this composer is about to start, so the view can follow where the server runs it. */
+  readonly onTurnSent: (sent: {
+    readonly messageId: MessageId;
+    readonly modelSelection: ModelSelection;
+  }) => void;
 }
 
 /**
@@ -316,6 +322,7 @@ export function useComposerSend(input: ComposerSendInput) {
     handleInteractionModeChange,
     handleNewThreadInActiveProject,
     persistThreadSettingsForNextTurn,
+    onTurnSent,
   } = input;
   const handleNewThread = useNewThreadHandler();
   const navigate = useNavigate();
@@ -1204,6 +1211,7 @@ export function useComposerSend(input: ComposerSendInput) {
           ? scopeThreadRef(environmentId, threadIdForSend)
           : null;
       if (backgroundThreadRef) beginBackgroundDraftSubmissionByRef(backgroundThreadRef);
+      onTurnSent({ messageId: messageIdForSend, modelSelection: ctxSelectedModelSelection });
       const startPromise = startThreadTurn({
         environmentId,
         input: {

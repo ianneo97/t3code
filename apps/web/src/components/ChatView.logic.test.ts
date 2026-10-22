@@ -7,6 +7,7 @@ import {
   withMessageContext,
   deriveAvailableRevertTurnCounts,
   deriveWorkspaceMutationId,
+  composerOwnSendOutcome,
 } from "./ChatView.logic";
 import { recallCheckoutIsRepo, rememberCheckoutIsRepo } from "./ChatView.logic";
 import { ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
@@ -1237,5 +1238,58 @@ describe("deriveWorkspaceMutationId", () => {
     expect(deriveWorkspaceMutationId([item("reply", "assistant_message", "completed")], null)).toBe(
       null,
     );
+  });
+});
+
+describe("composerOwnSendOutcome", () => {
+  const usedUp = ProviderInstanceId.make("codex");
+  const spare = ProviderInstanceId.make("codex_spare");
+  const other = ProviderInstanceId.make("claudeAgent");
+  const sent = { messageId: MessageId.make("message:sent"), instanceId: usedUp };
+  const run = (
+    messageId: string,
+    instanceId: ProviderInstanceId,
+    status: "running" | "queued" = "running",
+  ) => ({
+    userMessageId: MessageId.make(messageId),
+    status,
+    modelSelection: { instanceId, model: "gpt-6" },
+  });
+
+  it("takes on the account the server moved its own send to, including a new thread's first turn", () => {
+    expect(
+      composerOwnSendOutcome({
+        ownSend: sent,
+        runs: [run("message:sent", spare)],
+        composerInstanceId: usedUp,
+      }),
+    ).toEqual({ kind: "started", follow: { instanceId: spare, model: "gpt-6" } });
+  });
+
+  it("waits while its own send is queued, and ignores runs that other sources started", () => {
+    expect(
+      composerOwnSendOutcome({
+        ownSend: sent,
+        runs: [run("message:scheduled-task", spare), run("message:sent", usedUp, "queued")],
+        composerInstanceId: usedUp,
+      }),
+    ).toEqual({ kind: "waiting" });
+  });
+
+  it("keeps a pick made after sending, and leaves a turn that ran where it was sent", () => {
+    expect(
+      composerOwnSendOutcome({
+        ownSend: sent,
+        runs: [run("message:sent", spare)],
+        composerInstanceId: other,
+      }),
+    ).toEqual({ kind: "started", follow: null });
+    expect(
+      composerOwnSendOutcome({
+        ownSend: sent,
+        runs: [run("message:sent", usedUp)],
+        composerInstanceId: usedUp,
+      }),
+    ).toEqual({ kind: "started", follow: null });
   });
 });

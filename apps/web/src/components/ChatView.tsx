@@ -362,12 +362,15 @@ import { useDraftHeroLayoutTransition } from "./chat/useDraftHeroLayoutTransitio
 import { useLocalDispatchState } from "./chat/useLocalDispatchState";
 import { draftFanoutSelectionsAtom, draftSendState } from "./chat/chatViewSend";
 import {
+  composerOwnSendOutcome,
+  type ComposerOwnSend,
   isCompactCommandMessage,
   type LocalThreadErrorEntry,
   makeThreadErrorSetter,
 } from "./ChatView.logic";
 
 const EMPTY_PROVIDERS: ServerProvider[] = [];
+const EMPTY_RUNS: ReadonlyArray<never> = [];
 const EMPTY_PROVIDER_MODELS: ServerProvider["models"] = [];
 const EMPTY_USAGE_LIMIT_SOURCES: UsageLimitSourceSnapshots = [];
 import type { CodexArtifactTemplate } from "@t3tools/shared/codexArtifactTemplates";
@@ -1166,45 +1169,28 @@ export default function ChatView(props: ChatViewProps) {
     (providerEnvironmentId === undefined
       ? undefined
       : providersByEnvironment.get(providerEnvironmentId)) ?? EMPTY_PROVIDERS;
-  // The composer keeps the account the user last picked. When a new turn
-  // starts on a different account than that (the server routed it away from a
-  // used-up account, or another client switched the thread), follow that
-  // turn, so the composer does not keep naming an account it is not using.
-  // The run's own selection is the reference: it arrives with the run, while
-  // the thread's saved selection may update a moment later.
-  const latestRunSelection =
-    isServerThread && serverProjection !== null
-      ? (latestExecutedRun(serverProjection.runs) ?? null)
-      : null;
+  // The composer keeps the account the user last picked, and follows only its
+  // own send when the server starts it on another account (moved off a used-up
+  // one); runs from scheduled tasks, agents or other clients never change it.
+  // The message id is unique, so this also covers a draft's first send, which
+  // moves the view from the draft route to the thread route.
+  const ownSendRef = useRef<ComposerOwnSend | null>(null);
+  const serverRuns =
+    isServerThread && serverProjection !== null ? serverProjection.runs : EMPTY_RUNS;
   const setComposerDraftModelSelection = useComposerDraftStore((store) => store.setModelSelection);
-  const followedRunRef = useRef<{ threadKey: string; runId: string | null } | null>(null);
   useEffect(() => {
-    const runId = latestRunSelection?.id ?? null;
-    const previous = followedRunRef.current;
-    followedRunRef.current = { threadKey: routeThreadKey, runId };
-    if (
-      latestRunSelection === null ||
-      previous === null ||
-      previous.threadKey !== routeThreadKey ||
-      // Unknown before means the thread was still loading, not that a turn
-      // started: a selection picked but not yet sent must survive a reload.
-      previous.runId === null ||
-      previous.runId === runId ||
-      composerActiveProvider === null ||
-      composerActiveProvider === latestRunSelection.modelSelection.instanceId
-    ) {
-      return;
-    }
-    setComposerDraftModelSelection(composerDraftTarget, latestRunSelection.modelSelection, {
-      explicit: true,
+    const ownSend = ownSendRef.current;
+    if (ownSend === null) return;
+    const outcome = composerOwnSendOutcome({
+      ownSend,
+      runs: serverRuns,
+      composerInstanceId: composerActiveProvider,
     });
-  }, [
-    composerActiveProvider,
-    composerDraftTarget,
-    latestRunSelection,
-    routeThreadKey,
-    setComposerDraftModelSelection,
-  ]);
+    if (outcome.kind === "waiting") return;
+    ownSendRef.current = null;
+    if (outcome.follow === null) return;
+    setComposerDraftModelSelection(composerDraftTarget, outcome.follow, { explicit: true });
+  }, [composerActiveProvider, composerDraftTarget, serverRuns, setComposerDraftModelSelection]);
   const selectedProviderByThreadId = composerActiveProvider ?? null;
   const threadProvider =
     activeThread?.modelSelection.instanceId ??
@@ -3028,6 +3014,12 @@ export default function ChatView(props: ChatViewProps) {
     handleInteractionModeChange,
     handleNewThreadInActiveProject,
     persistThreadSettingsForNextTurn,
+    onTurnSent: (sent) => {
+      ownSendRef.current = {
+        messageId: sent.messageId,
+        instanceId: sent.modelSelection.instanceId,
+      };
+    },
   });
   const onImplementPlanInNewThreadStable = useStableCallback(onImplementPlanInNewThread);
 
