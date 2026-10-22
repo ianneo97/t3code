@@ -87,8 +87,9 @@ export function useComposerResume(input: ComposerResumeInput) {
   const isResuming = resumingThreadKeys.has(routeThreadKey);
   const { sendInFlight: sendInFlightRef } = draftSendState(routeThreadKey);
 
-  // `switchTo` moves the thread to another account while it continues.
-  const resumeThread = async (switchTo?: ModelSelection) => {
+  // `switchTo` moves the thread to another account while it continues. False
+  // when nothing could start (busy, or no failed turn to continue on that account).
+  const resumeThread = async (switchTo?: ModelSelection): Promise<boolean> => {
     if (
       !activeThread ||
       (resumableRunId === null && (!hasHeldQueuedRuns || switchTo !== undefined)) ||
@@ -100,7 +101,7 @@ export function useComposerResume(input: ComposerResumeInput) {
       activeEnvironmentUnavailable ||
       sendInFlightRef.current
     ) {
-      return;
+      return false;
     }
     const threadId = activeThread.id;
     sendInFlightRef.current = true;
@@ -169,6 +170,7 @@ export function useComposerResume(input: ComposerResumeInput) {
       next.delete(routeThreadKey);
       return next;
     });
+    return true;
   };
 
   const onResume = () => resumeThread();

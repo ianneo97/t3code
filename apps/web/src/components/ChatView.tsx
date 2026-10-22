@@ -2661,11 +2661,15 @@ export default function ChatView(props: ChatViewProps) {
     setThreadError,
   });
   // Stable: the banner items are built during render, and these handlers read refs.
-  const switchFromLimitRecoveryBanner = useStableCallback((target: LimitSwitchTarget) =>
-    resumeThread(target.selection),
-  );
+  const switchFromLimitRecoveryBanner = useStableCallback(async (target: LimitSwitchTarget) => {
+    // The banner reports a throw as "Could not continue with <account>".
+    if (!(await resumeThread(target.selection))) {
+      throw new Error("Another send is in progress, or there is no stopped turn to continue.");
+    }
+  });
   const switchFromLimitSwitchBanner = useStableCallback((target: LimitSwitchTarget) => {
-    onProviderModelSelectStable(target.selection.instanceId, target.selection.model);
+    // A refused change already shows its own warning.
+    if (!onProviderModelSelectStable(target.selection.instanceId, target.selection.model)) return;
     toastManager.add({
       type: "success",
       title: `Switched to ${target.label}`,
