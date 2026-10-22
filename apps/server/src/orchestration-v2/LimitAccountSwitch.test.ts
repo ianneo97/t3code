@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
+  ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   RunId,
@@ -49,17 +50,32 @@ function command(overrides: Partial<LimitAccountSwitchCommand> = {}): LimitAccou
   return { dispatchMode: { type: "start_immediately" }, ...overrides };
 }
 
-const idle = { modelSelection: usedUp, activeRunId: null };
+const PROJECT = ProjectId.make("project:test");
+const idle = { projectId: PROJECT, modelSelection: usedUp, activeRunId: null };
+const settings = {
+  providerInstances: {
+    [ProviderInstanceId.make("codex_personal")]: { driver: ProviderDriverKind.make("codex") },
+    [ProviderInstanceId.make("codex_work")]: { driver: ProviderDriverKind.make("codex") },
+  },
+  projectSettingsOverrides: {},
+};
 
 describe("limitAccountSwitchSelection", () => {
   it("moves a fresh turn off the used-up account, whether the selection came with the message or from the thread", () => {
     expect(
-      limitAccountSwitchSelection({ command: command(), thread: idle, providers, nowMs: NOW }),
+      limitAccountSwitchSelection({
+        command: command(),
+        thread: idle,
+        settings,
+        providers,
+        nowMs: NOW,
+      }),
     ).toEqual({ instanceId: "codex_personal", model: "gpt-6" });
     expect(
       limitAccountSwitchSelection({
         command: command({ modelSelection: usedUp }),
         thread: { ...idle, modelSelection: { ...usedUp, instanceId: providers[1]!.instanceId } },
+        settings,
         providers,
         nowMs: NOW,
       }),
@@ -73,6 +89,7 @@ describe("limitAccountSwitchSelection", () => {
           modelSelection: { ...usedUp, instanceId: providers[1]!.instanceId },
         }),
         thread: idle,
+        settings,
         providers,
         nowMs: NOW,
       }),
@@ -94,10 +111,32 @@ describe("limitAccountSwitchSelection", () => {
         limitAccountSwitchSelection({
           command: command(overrides),
           thread: { ...idle, activeRunId },
+          settings,
           providers,
           nowMs: NOW,
         }),
       ).toBeNull();
     }
+  });
+
+  it("never hands the turn to an account switched off for the thread's project", () => {
+    expect(
+      limitAccountSwitchSelection({
+        command: command(),
+        thread: idle,
+        settings: {
+          ...settings,
+          projectSettingsOverrides: {
+            [PROJECT]: {
+              providerInstances: {
+                [ProviderInstanceId.make("codex_personal")]: { enabled: false },
+              },
+            },
+          },
+        },
+        providers: [...providers, provider("codex_work", 60)],
+        nowMs: NOW,
+      }),
+    ).toEqual({ instanceId: "codex_work", model: "gpt-6" });
   });
 });

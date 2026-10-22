@@ -682,11 +682,8 @@ const make = Effect.gen(function* () {
       if (command.type !== "message.dispatch" || Option.isNone(providerRegistry)) {
         return command;
       }
-      const enabled = yield* serverSettings.getSettings.pipe(
-        Effect.map((settings) => settings.switchAccountAtUsageLimit),
-        Effect.orElseSucceed(() => false),
-      );
-      if (!enabled) return command;
+      const settings = yield* serverSettings.getSettings.pipe(Effect.orElseSucceed(() => null));
+      if (settings === null || !settings.switchAccountAtUsageLimit) return command;
       const thread = yield* orchestrator
         .getThreadShell(command.threadId)
         .pipe(Effect.orElseSucceed(() => null));
@@ -694,6 +691,7 @@ const make = Effect.gen(function* () {
       const selection = limitAccountSwitchSelection({
         command,
         thread,
+        settings,
         providers: yield* providerRegistry.value.getProviders,
         nowMs: yield* Clock.currentTimeMillis,
       });

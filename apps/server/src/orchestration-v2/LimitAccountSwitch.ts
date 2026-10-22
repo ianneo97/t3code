@@ -8,11 +8,13 @@
  *
  * @module LimitAccountSwitch
  */
-import type {
-  ModelSelection,
-  OrchestrationV2Command,
-  OrchestrationV2ThreadShell,
-  ServerProvider,
+import {
+  resolveProjectProviderInstanceEnabled,
+  type ModelSelection,
+  type OrchestrationV2Command,
+  type OrchestrationV2ThreadShell,
+  type ServerProvider,
+  type ServerSettings,
 } from "@t3tools/contracts";
 import { selectionAfterExhaustedLimit } from "@t3tools/shared/usageLimitSwitch";
 
@@ -29,7 +31,8 @@ export type LimitAccountSwitchCommand = Pick<
 /** Null when the command should be dispatched as it came. */
 export function limitAccountSwitchSelection(input: {
   readonly command: LimitAccountSwitchCommand;
-  readonly thread: Pick<OrchestrationV2ThreadShell, "modelSelection" | "activeRunId">;
+  readonly thread: Pick<OrchestrationV2ThreadShell, "projectId" | "modelSelection" | "activeRunId">;
+  readonly settings: Pick<ServerSettings, "providerInstances" | "projectSettingsOverrides">;
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly nowMs: number;
 }): ModelSelection | null {
@@ -46,7 +49,10 @@ export function limitAccountSwitchSelection(input: {
     return null;
   }
   return selectionAfterExhaustedLimit({
-    providers: input.providers,
+    // The dispatch rejects an account switched off for the thread's project, so it never takes over.
+    providers: input.providers.filter((provider) =>
+      resolveProjectProviderInstanceEnabled(input.settings, thread.projectId, provider.instanceId),
+    ),
     current: command.modelSelection ?? thread.modelSelection,
     nowMs: input.nowMs,
   });
