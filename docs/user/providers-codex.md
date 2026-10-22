@@ -118,8 +118,9 @@ background-task updates. The monthly credit limit does not count as used up, and
 an account without plan limits, such as an API key, is never picked. When no
 other account has room, the turn runs where it was.
 
-After **Continue with**, messages queued on the used-up account stay held until
-you send them, so they do not run there by mistake.
+Messages waiting in the queue run after **Continue with**. With the setting on,
+each starts on an account that has room left. With it off, each keeps the
+account it was queued on, even when that account is used up.
 
 ## Send feedback to OpenAI
 

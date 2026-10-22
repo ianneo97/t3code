@@ -88,6 +88,10 @@ on their account. An account without plan limits, such as an API key, is never
 picked. The composer also offers **Switch to** once the selected account has 10%
 or less left.
 
+Messages waiting in the queue run after **Continue with**. With the setting on,
+each starts on an account that has room left. With it off, each keeps the
+account it was queued on, even when that account is used up.
+
 ## Skills
 
 Claude skills come from the config directory's `skills` folder and the project's
