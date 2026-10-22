@@ -4,7 +4,9 @@
  * or run on paid credits while another subscription sits unused.
  *
  * Only fresh turns are rerouted. Work that belongs to a run already under way
- * (a steer, a restart, a delegated completion) stays on that run's account.
+ * (a steer, a restart, a delegated completion) stays on that run's account, and
+ * so does a provider wake-up: it delivers output buffered in that account's
+ * CLI session, which another account does not have.
  *
  * @module LimitAccountSwitch
  */
@@ -25,6 +27,7 @@ export type LimitAccountSwitchCommand = Pick<
   | "restartContinuationOfRunId"
   | "deliveryIntent"
   | "dispatchMode"
+  | "creationSource"
 >;
 
 /** Null when the command should be dispatched as it came. */
@@ -43,7 +46,8 @@ export function limitAccountSwitchSelection(input: {
     command.deliveryIntent === "steer" ||
     command.deliveryIntent === "restart" ||
     command.dispatchMode.type === "steer_active" ||
-    command.dispatchMode.type === "restart_active"
+    command.dispatchMode.type === "restart_active" ||
+    command.creationSource === "provider"
   ) {
     return null;
   }

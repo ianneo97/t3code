@@ -47,7 +47,7 @@ const usedUp: ModelSelection = { instanceId: ProviderInstanceId.make("codex"), m
 const providers = [provider("codex", 100), provider("codex_personal", 20)];
 
 function command(overrides: Partial<LimitAccountSwitchCommand> = {}): LimitAccountSwitchCommand {
-  return { dispatchMode: { type: "start_immediately" }, ...overrides };
+  return { dispatchMode: { type: "start_immediately" }, creationSource: "web", ...overrides };
 }
 
 const PROJECT = ProjectId.make("project:test");
@@ -117,6 +117,29 @@ describe("limitAccountSwitchSelection", () => {
         }),
       ).toBeNull();
     }
+  });
+
+  it("keeps a provider wake-up on its account, since only that session holds the buffered output", () => {
+    const wake = { dispatchMode: { type: "queue_after_active" } } as const;
+    expect(
+      limitAccountSwitchSelection({
+        command: command({ ...wake, creationSource: "provider" }),
+        thread: idle,
+        settings,
+        providers,
+        nowMs: NOW,
+      }),
+    ).toBeNull();
+    // A plain-text wake carries no buffered output, so it is an ordinary fresh turn.
+    expect(
+      limitAccountSwitchSelection({
+        command: command({ ...wake, creationSource: "server" }),
+        thread: idle,
+        settings,
+        providers,
+        nowMs: NOW,
+      }),
+    ).toEqual({ instanceId: "codex_personal", model: "gpt-6" });
   });
 
   it("never hands the turn to an account switched off for the thread's project", () => {
