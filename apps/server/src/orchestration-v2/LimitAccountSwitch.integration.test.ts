@@ -455,6 +455,49 @@ it.effect("starts a queued message on another account when its own has used up a
 );
 
 it.effect(
+  "sends a held message now on the account that takes over after its own hit the limit",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const result = yield* runQueuedBehindFirstTurn({
+          name: "queued-limit-switch-send-now",
+          switchAccountAtUsageLimit: true,
+          firstOn: usedUp,
+          firstOutcome: "usage_limit",
+        });
+        assert.deepEqual(
+          { started: result.started, delivery: result.delivery, handoff: result.handoff },
+          {
+            started: [
+              { instanceId: usedUp, text: "first" },
+              { instanceId: spare, text: "queued", withContext: true },
+            ],
+            delivery: movedToSpare,
+            handoff: handedOffFromFirstTurn,
+          },
+        );
+      }),
+    ),
+);
+
+it.effect("keeps a held message on its used-up account while the switch is off", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        runQueuedBehindFirstTurn({
+          name: "queued-limit-switch-off-send-now",
+          switchAccountAtUsageLimit: false,
+          firstOn: usedUp,
+          firstOutcome: "usage_limit",
+        }),
+      );
+      assert.instanceOf(error, Orchestrator.OrchestratorDispatchError);
+      assert.include(String(error.cause), "Continue the limited thread before resuming its queue.");
+    }),
+  ),
+);
+
+it.effect(
   'starts a held message on the conversation that "Continue with" moved to another account',
   () =>
     Effect.scoped(

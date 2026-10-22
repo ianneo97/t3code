@@ -1391,6 +1391,34 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     ]);
   });
 
+  /**
+   * The selection a queued run starts with: its own, or, with "Switch account
+   * at usage limit" on, another account's when its own is used up. Decided at
+   * start, since the account may run out while the run waits.
+   */
+  const queuedRunStartSelection = Effect.fn("Orchestrator.queuedRunStartSelection")(function* (
+    projection: Pick<OrchestrationV2ThreadProjection, "thread" | "messages">,
+    run: OrchestrationV2Run,
+  ) {
+    const pinned = queuedRunModelSelection(projection, run);
+    const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
+    const switched =
+      settings.switchAccountAtUsageLimit && Option.isSome(providerRegistry)
+        ? queuedRunLimitSwitchSelection({
+            run,
+            creationSource: projection.messages.find(
+              (candidate) => candidate.id === run.userMessageId,
+            )?.creationSource,
+            current: pinned,
+            projectId: projection.thread.projectId,
+            settings,
+            providers: yield* providerRegistry.value.getProviders,
+            nowMs: yield* Clock.currentTimeMillis,
+          })
+        : null;
+    return { pinned, switched };
+  });
+
   const startNextQueuedRun = Effect.fn("Orchestrator.startNextQueuedRun")(
     function* (
       threadId: ThreadId,
@@ -1424,21 +1452,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         (candidate) => candidate.id === storedQueuedRun.userMessageId,
       );
       const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
-      const pinnedSelection = queuedRunModelSelection(projection, storedQueuedRun);
-      // The same decision as a fresh turn, made now: the account it was queued
-      // on may have run out while it waited.
-      const switchedSelection =
-        settings.switchAccountAtUsageLimit && Option.isSome(providerRegistry)
-          ? queuedRunLimitSwitchSelection({
-              run: storedQueuedRun,
-              creationSource: queuedMessage?.creationSource,
-              current: pinnedSelection,
-              projectId: projection.thread.projectId,
-              settings,
-              providers: yield* providerRegistry.value.getProviders,
-              nowMs: yield* Clock.currentTimeMillis,
-            })
-          : null;
+      const { pinned: pinnedSelection, switched: switchedSelection } =
+        yield* queuedRunStartSelection(projection, storedQueuedRun);
       if (switchedSelection !== null) {
         yield* Effect.logInfo("Starting the queued turn on another account: usage limit reached", {
           threadId,
@@ -11525,12 +11540,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           }
         }
         const nextRun = selectedRun ?? nextQueuedRun(projection);
+        const nextSelection =
+          nextRun === undefined ? null : yield* queuedRunStartSelection(projection, nextRun);
         if (
           usageLimitHoldsQueue(
             projection,
-            nextRun === undefined
+            nextSelection === null
               ? projection.thread.providerInstanceId
-              : queuedRunModelSelection(projection, nextRun).instanceId,
+              : (nextSelection.switched ?? nextSelection.pinned).instanceId,
           )
         ) {
           return yield* new OrchestratorDispatchError({
