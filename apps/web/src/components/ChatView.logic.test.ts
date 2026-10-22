@@ -8,8 +8,10 @@ import {
   deriveAvailableRevertTurnCounts,
   deriveWorkspaceMutationId,
   composerOwnSendOutcome,
+  composerNextTurnSelection,
 } from "./ChatView.logic";
 import { recallCheckoutIsRepo, rememberCheckoutIsRepo } from "./ChatView.logic";
+import { suggestLimitSwitch } from "@t3tools/client-runtime/state/limit-switch-targets";
 import { ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
 import { deriveProviderInstanceEntries } from "../providerInstances";
 import { ensureInlineContextReferences } from "../lib/composerContextReferences";
@@ -1291,5 +1293,66 @@ describe("composerOwnSendOutcome", () => {
         composerInstanceId: usedUp,
       }),
     ).toEqual({ kind: "started", follow: null });
+  });
+});
+
+describe("composerNextTurnSelection", () => {
+  it("lets a new-thread draft on a used-up account offer the switch for the model picked in the composer", () => {
+    const team = ProviderInstanceId.make("codex");
+    const plus = ProviderInstanceId.make("codex_org2");
+    const codex = (instanceId: ProviderInstanceId, weeklyUsed: number): ServerProvider => ({
+      instanceId,
+      driver: ProviderDriverKind.make("codex"),
+      enabled: true,
+      installed: true,
+      version: "1.0.0",
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: "2026-10-22T04:00:00.000Z",
+      models: [{ slug: "gpt-5.6-luna", name: "GPT-5.6-Luna", isCustom: false, capabilities: null }],
+      slashCommands: [],
+      skills: [],
+      usageLimits: {
+        checkedAt: "2026-10-22T04:00:00.000Z",
+        windows: [
+          {
+            id: "secondary",
+            kind: "weekly",
+            label: "Weekly",
+            usedPercent: weeklyUsed,
+            resetsAt: "2026-10-27T07:19:17.000Z",
+          },
+        ],
+      },
+    });
+    const providers = [codex(team, 100), codex(plus, 87)];
+    const projectId = ProjectId.make("project:draft");
+    // A draft's own selection is the project default, here a Claude model.
+    const current = composerNextTurnSelection({
+      composerSelection: { instanceId: team, model: "gpt-5.6-luna" },
+      threadSelection: {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-opus-5-5",
+      },
+      activeInstanceId: team,
+    });
+    const suggestion = suggestLimitSwitch({
+      providers,
+      current,
+      project: {
+        settings: {
+          providerInstances: {
+            [team]: { driver: ProviderDriverKind.make("codex") },
+            [plus]: { driver: ProviderDriverKind.make("codex") },
+          },
+          projectSettingsOverrides: {},
+        },
+        projectId,
+      },
+      nowMs: Date.parse("2026-10-22T04:24:00.000Z"),
+    });
+    expect(suggestion?.targets.map((target) => target.selection)).toEqual([
+      { instanceId: plus, model: "gpt-5.6-luna" },
+    ]);
   });
 });

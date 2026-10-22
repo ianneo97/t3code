@@ -1020,6 +1020,21 @@ export function composerOwnSendOutcome(input: {
   };
 }
 
+/**
+ * The selection the composer's next send carries, so a usage-limit offer ranks
+ * the way the server will. A new-thread draft's own selection is only the
+ * project default, so the model picked in the composer comes first.
+ */
+export function composerNextTurnSelection(input: {
+  readonly composerSelection: ModelSelection | null;
+  readonly threadSelection: ModelSelection;
+  readonly activeInstanceId: ProviderInstanceId;
+}): ModelSelection {
+  return input.composerSelection?.instanceId === input.activeInstanceId
+    ? input.composerSelection
+    : { ...input.threadSelection, instanceId: input.activeInstanceId };
+}
+
 // Imported history has no session until its first prompt. Resolve its instance
 // through the environment's provider catalog before locking to a driver.
 export function deriveLockedProvider(input: {

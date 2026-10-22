@@ -362,6 +362,7 @@ import { useDraftHeroLayoutTransition } from "./chat/useDraftHeroLayoutTransitio
 import { useLocalDispatchState } from "./chat/useLocalDispatchState";
 import { draftFanoutSelectionsAtom, draftSendState } from "./chat/chatViewSend";
 import {
+  composerNextTurnSelection,
   composerOwnSendOutcome,
   type ComposerOwnSend,
   isCompactCommandMessage,
@@ -2718,7 +2719,11 @@ export default function ChatView(props: ChatViewProps) {
     limitSwitchSettings !== null
       ? suggestLimitSwitch({
           providers: providerStatuses,
-          current: { ...activeThread.modelSelection, instanceId: activeProviderInstanceId },
+          current: composerNextTurnSelection({
+            composerSelection: composerSelectedModelSelection,
+            threadSelection: activeThread.modelSelection,
+            activeInstanceId: activeProviderInstanceId,
+          }),
           project: { settings: limitSwitchSettings, projectId: activeThread.projectId },
           nowMs: limitSwitchNowMs,
         })
