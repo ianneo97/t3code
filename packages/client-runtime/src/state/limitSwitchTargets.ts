@@ -1,6 +1,6 @@
 /**
  * Which other accounts of the same provider can take over a thread that hit a
- * usage limit. Shared by web and mobile so both offer the same targets.
+ * usage limit. Lives here so every client offers the targets the server picks.
  *
  * @module limitSwitchTargets
  */

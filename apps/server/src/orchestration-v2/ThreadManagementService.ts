@@ -675,9 +675,10 @@ const make = Effect.gen(function* () {
     }
   };
 
-  // Every way to start a turn (clients, agent tools, scheduled tasks) comes
-  // through here, so this is where a used-up account hands over. Reading the
-  // limits is I/O, which the orchestrator's decisions must not do.
+  // Fresh turns and delegated tasks from clients, agent tools and scheduled
+  // tasks come through here; a queued message is decided again when it starts
+  // (Orchestrator `startNextQueuedRun`). Reading the limits is I/O, which the
+  // orchestrator's command decisions must not do.
   const withLimitAccountSwitch = Effect.fn("orchestrationV2.threadManagement.limitAccountSwitch")(
     function* (command: Parameters<ThreadManagementServiceShape["dispatch"]>[0]) {
       if (

@@ -104,14 +104,22 @@ reset. On a workspace plan the message also says whether your workspace owner
 needs to add credits or raise the spend limit to continue sooner.
 
 Codex can keep working past a used-up limit by spending ChatGPT credits, so the
-turn never stops. Once the selected account's session or weekly limit is used up,
-the composer shows **Switch to** another signed-in account for your next message.
+turn never stops. Once the selected account has 10% or less left of its session
+or weekly limit, the composer shows **Switch to** another signed-in account for
+your next message.
 
-To make that switch without a click, turn on **Settings → General → Switch account at usage
-limit**. A new turn then starts on another signed-in account of the same provider that offers the
-model, whenever the thread's account has used up a usage window. It applies to messages you send,
-to scheduled tasks, and to turns agents start. A turn that is already running stays on its account.
-When no other account has allowance left, the turn runs where it was.
+To make that switch without a click, turn on **Settings → General → Switch
+account at usage limit**. When the thread's account has used up its session or
+weekly limit, a new turn starts on another signed-in Codex account that offers
+the model and has room left. This covers messages you send, queued messages when
+they start, scheduled tasks, and tasks an agent delegates. A turn that is already
+running stays on its account, and so do steering messages, compaction and
+background-task updates. The monthly credit limit does not count as used up, and
+an account without plan limits, such as an API key, is never picked. When no
+other account has room, the turn runs where it was.
+
+After **Continue with**, messages queued on the used-up account stay held until
+you send them, so they do not run there by mistake.
 
 ## Send feedback to OpenAI
 

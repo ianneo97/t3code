@@ -77,6 +77,17 @@ signed-in Claude instance that offers the thread's model, the notice also shows
 **Continue with** that account. The warning's
 timestamp shows when the displayed wait started.
 
+With **Settings → General → Switch account at usage limit** on, a new turn
+starts on another signed-in Claude account that offers the model once the
+thread's account has used up its session or weekly limit. A model's own weekly
+limit, such as **Weekly · Fable**, counts only for turns of that model, and the
+monthly extra-usage spend does not count. The switch covers messages you send,
+queued messages when they start, scheduled tasks, and tasks an agent delegates.
+A running turn, steering messages, compaction and background-task updates stay
+on their account. An account without plan limits, such as an API key, is never
+picked. The composer also offers **Switch to** once the selected account has 10%
+or less left.
+
 ## Skills
 
 Claude skills come from the config directory's `skills` folder and the project's
