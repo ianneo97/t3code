@@ -2,12 +2,17 @@ import { expect, it } from "@effect/vitest";
 import {
   CommandId,
   MessageId,
+  NodeId,
+  type OrchestrationV2ServerCommand,
   type OrchestrationV2Run,
   type OrchestrationV2StoredEvent,
   type OrchestrationV2ThreadProjection,
+  type OrchestrationV2ThreadShell,
   ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
   RunId,
+  type ServerProvider,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
@@ -18,6 +23,7 @@ import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
+import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
@@ -336,4 +342,121 @@ it.effect.each([
 
     expect(dispatched).toEqual(settles ? ["thread.settle"] : []);
   }),
+);
+
+const limitSwitchProjectId = ProjectId.make("project:thread-management:limit-switch");
+const limitSwitchThreadId = ThreadId.make("thread:thread-management:limit-switch");
+const usedUpInstance = ProviderInstanceId.make("codex");
+const spareInstance = ProviderInstanceId.make("codex_spare");
+
+function limitSwitchProvider(instanceId: ProviderInstanceId, weeklyUsed: number): ServerProvider {
+  return {
+    instanceId,
+    driver: ProviderDriverKind.make("codex"),
+    enabled: true,
+    installed: true,
+    version: "1.0.0",
+    status: "ready",
+    auth: { status: "authenticated" },
+    checkedAt: "2026-10-10T11:59:00.000Z",
+    models: [{ slug: "gpt-6", name: "GPT-6", isCustom: false, capabilities: null }],
+    slashCommands: [],
+    skills: [],
+    usageLimits: {
+      checkedAt: "2026-10-10T11:59:00.000Z",
+      windows: [
+        {
+          id: "secondary",
+          kind: "weekly",
+          label: "Weekly",
+          usedPercent: weeklyUsed,
+          resetsAt: "2999-01-01T00:00:00.000Z",
+        },
+      ],
+    },
+  };
+}
+
+/** The real service over an orchestrator that records what it is asked to run. */
+const layerLimitSwitchTest = (input: {
+  readonly switchAccountAtUsageLimit: boolean;
+  readonly dispatched: Array<OrchestrationV2ServerCommand>;
+}) =>
+  ThreadManagementService.layer.pipe(
+    Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+    Layer.provide(
+      Layer.mock(Orchestrator.OrchestratorV2)({
+        getThreadShell: () =>
+          Effect.succeed({
+            id: limitSwitchThreadId,
+            projectId: limitSwitchProjectId,
+            modelSelection: { instanceId: usedUpInstance, model: "gpt-6" },
+            activeRunId: null,
+          } as unknown as OrchestrationV2ThreadShell),
+        getThreadRecords: () =>
+          Effect.succeed({
+            thread: {
+              id: limitSwitchThreadId,
+              projectId: limitSwitchProjectId,
+              deletedAt: null,
+              modelSelection: { instanceId: usedUpInstance, model: "gpt-6" },
+            },
+          } as unknown as OrchestrationV2ThreadProjection),
+        dispatch: (command) =>
+          Effect.sync(() => {
+            input.dispatched.push(command);
+            return { sequence: input.dispatched.length, storedEvents: [] } as never;
+          }),
+      }),
+    ),
+    Layer.provide(
+      Layer.mock(ProviderRegistry.ProviderRegistry)({
+        getProviders: Effect.succeed([
+          limitSwitchProvider(usedUpInstance, 100),
+          limitSwitchProvider(spareInstance, 20),
+        ]),
+      }),
+    ),
+    Layer.provide(
+      ServerSettings.layerTest({
+        switchAccountAtUsageLimit: input.switchAccountAtUsageLimit,
+        providerInstances: {
+          [usedUpInstance]: { driver: "codex" },
+          [spareInstance]: { driver: "codex" },
+        },
+      }),
+    ),
+    Layer.provideMerge(layerReceiptsTest),
+  );
+
+it.effect.each([
+  { switchAccountAtUsageLimit: true, startsOn: spareInstance },
+  { switchAccountAtUsageLimit: false, startsOn: usedUpInstance },
+])(
+  "starts a delegated task on another account when the requested one is used up (switch on: $switchAccountAtUsageLimit)",
+  ({ switchAccountAtUsageLimit, startsOn }) => {
+    const dispatched: Array<OrchestrationV2ServerCommand> = [];
+    return Effect.gen(function* () {
+      const threads = yield* ThreadManagementService.ThreadManagementService;
+      yield* threads.dispatch({
+        type: "delegated_task.request",
+        commandId: CommandId.make("command:thread-management:delegate"),
+        parentThreadId: limitSwitchThreadId,
+        parentRunId: RunId.make("run:thread-management:parent"),
+        parentNodeId: NodeId.make("node:thread-management:parent"),
+        task: "Look into the failing test",
+        modelSelection: { instanceId: usedUpInstance, model: "gpt-6" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        createdBy: "agent",
+        creationSource: "mcp",
+      });
+      expect(dispatched).toMatchObject([
+        {
+          type: "delegated_task.request",
+          modelSelection: { instanceId: startsOn, model: "gpt-6" },
+        },
+      ]);
+    }).pipe(Effect.provide(layerLimitSwitchTest({ switchAccountAtUsageLimit, dispatched })));
+  },
 );

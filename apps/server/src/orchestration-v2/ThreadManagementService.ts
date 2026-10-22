@@ -36,6 +36,7 @@ import {
   type TurnItemId,
 } from "@t3tools/contracts";
 import { threadTranscriptHeader } from "@t3tools/shared/threadTranscript";
+import { selectionAfterExhaustedLimit } from "@t3tools/shared/usageLimitSwitch";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -679,26 +680,41 @@ const make = Effect.gen(function* () {
   // limits is I/O, which the orchestrator's decisions must not do.
   const withLimitAccountSwitch = Effect.fn("orchestrationV2.threadManagement.limitAccountSwitch")(
     function* (command: Parameters<ThreadManagementServiceShape["dispatch"]>[0]) {
-      if (command.type !== "message.dispatch" || Option.isNone(providerRegistry)) {
+      if (
+        (command.type !== "message.dispatch" && command.type !== "delegated_task.request") ||
+        Option.isNone(providerRegistry)
+      ) {
         return command;
       }
       const settings = yield* serverSettings.getSettings.pipe(Effect.orElseSucceed(() => null));
       if (settings === null || !settings.switchAccountAtUsageLimit) return command;
       const thread = yield* orchestrator
-        .getThreadShell(command.threadId)
+        .getThreadShell(
+          command.type === "message.dispatch" ? command.threadId : command.parentThreadId,
+        )
         .pipe(Effect.orElseSucceed(() => null));
       if (thread === null) return command;
-      const selection = limitAccountSwitchSelection({
-        command,
-        thread,
-        settings,
-        providers: yield* providerRegistry.value.getProviders,
-        nowMs: yield* Clock.currentTimeMillis,
-      });
+      const providers = yield* providerRegistry.value.getProviders;
+      const nowMs = yield* Clock.currentTimeMillis;
+      const current =
+        command.type === "message.dispatch"
+          ? (command.modelSelection ?? thread.modelSelection)
+          : command.modelSelection;
+      const selection =
+        command.type === "message.dispatch"
+          ? limitAccountSwitchSelection({ command, thread, settings, providers, nowMs })
+          : // A delegated task's first turn is a fresh turn in the parent's project.
+            selectionAfterExhaustedLimit({
+              providers,
+              current,
+              project: { settings, projectId: thread.projectId },
+              nowMs,
+            });
       if (selection === null) return command;
       yield* Effect.logInfo("Starting the turn on another account: usage limit reached", {
-        threadId: command.threadId,
-        from: (command.modelSelection ?? thread.modelSelection).instanceId,
+        threadId: thread.id,
+        command: command.type,
+        from: current.instanceId,
         to: selection.instanceId,
       });
       return { ...command, modelSelection: selection };
