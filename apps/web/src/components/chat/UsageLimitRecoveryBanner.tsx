@@ -45,9 +45,7 @@ export function usageLimitRecoveryBannerItem(props: RecoveryProps): ComposerBann
 }
 
 function switchTargetLabel(verb: string, target: LimitSwitchTarget): string {
-  const left =
-    target.remainingPercent === null ? "" : ` (${Math.round(target.remainingPercent)}% left)`;
-  return `${verb} ${target.label}${left}`;
+  return `${verb} ${target.label} (${Math.round(target.remainingPercent)}% left)`;
 }
 
 /**

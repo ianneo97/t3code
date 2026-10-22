@@ -2682,10 +2682,7 @@ export default function ChatView(props: ChatViewProps) {
     toastManager.add({
       type: "success",
       title: `Switched to ${target.label}`,
-      description:
-        target.remainingPercent === null
-          ? "Your next message uses this account."
-          : `Your next message uses this account. ${Math.round(target.remainingPercent)}% of its tightest limit is left.`,
+      description: `Your next message uses this account. ${Math.round(target.remainingPercent)}% of its tightest limit is left.`,
     });
   });
   // `nowMinute` is a UTC minute; ranking at that clock keeps render pure.

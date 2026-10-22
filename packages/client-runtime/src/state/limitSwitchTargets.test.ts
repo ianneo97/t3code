@@ -27,6 +27,7 @@ function provider(
     models: [{ slug: "gpt-6", name: "GPT-6", isCustom: false, capabilities: null }],
     slashCommands: [],
     skills: [],
+    usageLimits: usage(20),
     ...overrides,
   };
 }
@@ -97,6 +98,30 @@ describe("listLimitSwitchTargets", () => {
         provider("codex_b", { usageLimits: usage(100, "2026-10-10T11:00:00.000Z") }),
       ]),
     ).toEqual(["codex_b"]);
+  });
+
+  it("never offers an account that bills per token instead of reporting plan limits", () => {
+    expect(
+      targetIds([
+        provider("codex"),
+        provider("codex_api_key", {
+          usageLimits: {
+            checkedAt: "2026-10-10T11:59:00.000Z",
+            windows: [],
+            unavailable: { reason: "unsupported" },
+          },
+        }),
+        provider("codex_credits_only", {
+          usageLimits: {
+            checkedAt: "2026-10-10T11:59:00.000Z",
+            windows: [
+              { id: "individual", kind: "monthly", label: "Monthly credit limit", usedPercent: 5 },
+            ],
+          },
+        }),
+        provider("codex_plan", { usageLimits: usage(60) }),
+      ]),
+    ).toEqual(["codex_plan"]);
   });
 
   it("puts the same continuation group first, then the most headroom", () => {

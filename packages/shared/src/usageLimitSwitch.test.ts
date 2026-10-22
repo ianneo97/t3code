@@ -96,6 +96,26 @@ describe("selectionAfterExhaustedLimit", () => {
     ).toBeNull();
   });
 
+  it("never moves a turn onto an account that bills per token", () => {
+    expect(
+      selectionAfterExhaustedLimit({
+        providers: [
+          provider("codex", 100),
+          provider("codex_api_key", null),
+          provider("codex_unsupported", null, {
+            usageLimits: {
+              checkedAt: "2026-10-10T11:59:00.000Z",
+              windows: [],
+              unavailable: { reason: "unsupported" },
+            },
+          }),
+        ],
+        current,
+        nowMs: NOW,
+      }),
+    ).toBeNull();
+  });
+
   const claudeModels = ["claude-fable-5-1", "claude-haiku-5-5", "claude-opus-5-5"].map((slug) => ({
     slug,
     name: slug,

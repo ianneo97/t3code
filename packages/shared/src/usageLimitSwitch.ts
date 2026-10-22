@@ -86,15 +86,17 @@ function usageHeadroomPercent(
 export interface LimitSwitchCandidate<P extends SwitchProvider> {
   readonly provider: P;
   readonly selection: ModelSelection;
-  readonly remainingPercent: number | null;
+  /** Headroom of the tightest plan window that limits the selected model. */
+  readonly remainingPercent: number;
 }
 
 /**
  * Other ready, signed-in instances of the current instance's driver that offer
- * the same model and are not known to be out of quota. Instances sharing the
- * current one's continuation group come first, since they resume the native
- * thread; after that, the most headroom wins, then the instance id so the
- * order is stable.
+ * the same model and have room left in the plan limits they report. An account
+ * without plan limits (API key, Bedrock) bills per token, so it never takes
+ * over. Instances sharing the current one's continuation group come first,
+ * since they resume the native thread; after that, the most headroom wins,
+ * then the instance id so the order is stable.
  */
 export function rankLimitSwitchCandidates<P extends SwitchProvider>(input: {
   readonly providers: ReadonlyArray<P>;
@@ -121,6 +123,8 @@ export function rankLimitSwitchCandidates<P extends SwitchProvider>(input: {
       (entry) => entry.slug === input.current.model || entry.aliases?.includes(input.current.model),
     );
     if (!model || exhaustedUsageWindow(provider, model.slug, input.nowMs) !== undefined) return [];
+    const remainingPercent = usageHeadroomPercent(provider, model.slug);
+    if (remainingPercent === null) return [];
     return [
       {
         sameContinuation:
@@ -129,7 +133,7 @@ export function rankLimitSwitchCandidates<P extends SwitchProvider>(input: {
         candidate: {
           provider,
           selection: { ...input.current, instanceId: provider.instanceId, model: model.slug },
-          remainingPercent: usageHeadroomPercent(provider, model.slug),
+          remainingPercent,
         } satisfies LimitSwitchCandidate<P>,
       },
     ];
@@ -138,7 +142,7 @@ export function rankLimitSwitchCandidates<P extends SwitchProvider>(input: {
     .sort(
       (left, right) =>
         Number(right.sameContinuation) - Number(left.sameContinuation) ||
-        (right.candidate.remainingPercent ?? -1) - (left.candidate.remainingPercent ?? -1) ||
+        right.candidate.remainingPercent - left.candidate.remainingPercent ||
         left.candidate.provider.instanceId.localeCompare(right.candidate.provider.instanceId),
     )
     .map((entry) => entry.candidate);

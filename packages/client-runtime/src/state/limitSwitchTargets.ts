@@ -17,14 +17,14 @@ import { resolveProviderInstanceDisplayName } from "./providerInstanceDisplay.ts
 export interface LimitSwitchTarget {
   readonly selection: ModelSelection;
   readonly label: string;
-  /** Headroom of the tightest known window, or null when the account reports none. */
-  readonly remainingPercent: number | null;
+  /** Headroom of the tightest plan window that limits the selected model. */
+  readonly remainingPercent: number;
 }
 
 /**
- * Other ready, signed-in instances of the current instance's driver that offer
- * the thread's model and are not known to be out of quota, best first. See
- * `rankLimitSwitchCandidates` for the order.
+ * The accounts the server would move the turn to, best first; see
+ * `rankLimitSwitchCandidates`. Pay-per-token accounts are left out here too,
+ * so an offer never leads off the plan.
  */
 export function listLimitSwitchTargets(input: {
   readonly providers: ReadonlyArray<ServerProvider>;
