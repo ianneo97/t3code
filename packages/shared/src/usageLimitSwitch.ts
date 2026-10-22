@@ -21,12 +21,42 @@ type SwitchProvider = Pick<
   | "usageLimits"
 >;
 
-/** The used-up window that reopens last, which is the one the account is waiting on. */
+// Spend budgets bill past the plan instead of ending it: Claude's extra-usage
+// `monthly_spend` and Codex's `individual` monthly credit limit.
+const SPEND_WINDOW_IDS: Readonly<Record<string, true>> = { monthly_spend: true, individual: true };
+// Claude's model-scoped weekly windows; the suffix is the model's display name,
+// see `scopedWindowId` in apps/server/src/provider/claudeUsageLimits.ts.
+const MODEL_SCOPED_WINDOW_PREFIX = "seven_day_";
+
+function nameTokens(value: string): string {
+  return `_${value.toLowerCase().replace(/[^a-z0-9]+/g, "_")}_`;
+}
+
+/**
+ * The windows that can stop a turn of `model` on this account: the plan's own
+ * windows, plus a model-scoped window only when it names `model` (`seven_day_fable`
+ * limits `claude-fable-5-1`, not `claude-haiku-5-5`).
+ */
+export function planUsageWindows(
+  provider: Pick<ServerProvider, "usageLimits">,
+  model: string,
+): ReadonlyArray<ServerProviderUsageWindow> {
+  // An unsupported account has no windows; a failed probe keeps the ones turns streamed in.
+  return (provider.usageLimits?.windows ?? []).filter(
+    (window) =>
+      SPEND_WINDOW_IDS[window.id] !== true &&
+      (!window.id.startsWith(MODEL_SCOPED_WINDOW_PREFIX) ||
+        nameTokens(model).includes(`_${window.id.slice(MODEL_SCOPED_WINDOW_PREFIX.length)}_`)),
+  );
+}
+
+/** The used-up plan window that reopens last, which is the one a turn of `model` waits on. */
 export function exhaustedUsageWindow(
   provider: Pick<ServerProvider, "usageLimits">,
+  model: string,
   nowMs: number,
 ): ServerProviderUsageWindow | undefined {
-  return provider.usageLimits?.windows
+  return planUsageWindows(provider, model)
     .filter(
       (window) =>
         window.usedPercent >= 100 &&
@@ -43,11 +73,14 @@ export function exhaustedUsageWindow(
     );
 }
 
-/** Headroom of the tightest known window, or null when the account reports none. */
-function usageHeadroomPercent(provider: Pick<ServerProvider, "usageLimits">): number | null {
-  const usage = provider.usageLimits;
-  if (!usage || usage.unavailable || usage.windows.length === 0) return null;
-  return Math.max(0, 100 - Math.max(...usage.windows.map((window) => window.usedPercent)));
+/** Headroom of the tightest plan window for `model`, or null when the account reports none. */
+function usageHeadroomPercent(
+  provider: Pick<ServerProvider, "usageLimits">,
+  model: string,
+): number | null {
+  const windows = planUsageWindows(provider, model);
+  if (windows.length === 0) return null;
+  return Math.max(0, 100 - Math.max(...windows.map((window) => window.usedPercent)));
 }
 
 export interface LimitSwitchCandidate<P extends SwitchProvider> {
@@ -80,15 +113,14 @@ export function rankLimitSwitchCandidates<P extends SwitchProvider>(input: {
       !provider.installed ||
       provider.availability === "unavailable" ||
       provider.status !== "ready" ||
-      provider.auth.status !== "authenticated" ||
-      exhaustedUsageWindow(provider, input.nowMs) !== undefined
+      provider.auth.status !== "authenticated"
     ) {
       return [];
     }
     const model = provider.models.find(
       (entry) => entry.slug === input.current.model || entry.aliases?.includes(input.current.model),
     );
-    if (!model) return [];
+    if (!model || exhaustedUsageWindow(provider, model.slug, input.nowMs) !== undefined) return [];
     return [
       {
         sameContinuation:
@@ -97,7 +129,7 @@ export function rankLimitSwitchCandidates<P extends SwitchProvider>(input: {
         candidate: {
           provider,
           selection: { ...input.current, instanceId: provider.instanceId, model: model.slug },
-          remainingPercent: usageHeadroomPercent(provider),
+          remainingPercent: usageHeadroomPercent(provider, model.slug),
         } satisfies LimitSwitchCandidate<P>,
       },
     ];
@@ -125,6 +157,8 @@ export function selectionAfterExhaustedLimit(input: {
   const source = input.providers.find(
     (provider) => provider.instanceId === input.current.instanceId,
   );
-  if (!source || exhaustedUsageWindow(source, input.nowMs) === undefined) return null;
+  if (!source || exhaustedUsageWindow(source, input.current.model, input.nowMs) === undefined) {
+    return null;
+  }
   return rankLimitSwitchCandidates(input)[0]?.selection ?? null;
 }

@@ -95,4 +95,106 @@ describe("selectionAfterExhaustedLimit", () => {
       }),
     ).toBeNull();
   });
+
+  const claudeModels = ["claude-fable-5-1", "claude-haiku-5-5", "claude-opus-5-5"].map((slug) => ({
+    slug,
+    name: slug,
+    isCustom: false,
+    capabilities: null,
+  }));
+  function usageLimits(windows: ReadonlyArray<[id: string, used: number]>) {
+    return {
+      checkedAt: "2026-10-10T11:59:00.000Z",
+      windows: windows.map(([id, usedPercent]) => ({
+        id,
+        kind: "weekly" as const,
+        label: id,
+        usedPercent,
+        resetsAt: "2026-10-14T02:00:00.000Z",
+      })),
+    };
+  }
+  function claude(instanceId: string, windows: ReadonlyArray<[id: string, used: number]>) {
+    return provider(instanceId, null, {
+      driver: ProviderDriverKind.make("claudeAgent"),
+      models: claudeModels,
+      usageLimits: usageLimits(windows),
+    });
+  }
+  const on = (instanceId: string, model: string): ModelSelection => ({
+    instanceId: ProviderInstanceId.make(instanceId),
+    model,
+  });
+
+  it("counts a model's own weekly window only for turns of that model", () => {
+    const fableUsedUp = claude("claude_fable_out", [
+      ["five_hour", 10],
+      ["seven_day", 40],
+      ["seven_day_fable", 100],
+    ]);
+    const sessionUsedUp = claude("claude_session_out", [["five_hour", 100]]);
+    const free = claude("claude_free", [["five_hour", 5]]);
+
+    expect(
+      selectionAfterExhaustedLimit({
+        providers: [fableUsedUp, sessionUsedUp],
+        current: on("claude_session_out", "claude-haiku-5-5"),
+        nowMs: NOW,
+      }),
+    ).toEqual(on("claude_fable_out", "claude-haiku-5-5"));
+    expect(
+      selectionAfterExhaustedLimit({
+        providers: [fableUsedUp, sessionUsedUp],
+        current: on("claude_session_out", "claude-fable-5-1"),
+        nowMs: NOW,
+      }),
+    ).toBeNull();
+    for (const model of ["claude-haiku-5-5", "claude-opus-5-5"]) {
+      expect(
+        selectionAfterExhaustedLimit({
+          providers: [fableUsedUp, free],
+          current: on("claude_fable_out", model),
+          nowMs: NOW,
+        }),
+      ).toBeNull();
+    }
+    expect(
+      selectionAfterExhaustedLimit({
+        providers: [fableUsedUp, free],
+        current: on("claude_fable_out", "claude-fable-5-1"),
+        nowMs: NOW,
+      }),
+    ).toEqual(on("claude_free", "claude-fable-5-1"));
+  });
+
+  it("does not treat a spent extra-usage or credit budget as a used-up plan", () => {
+    expect(
+      selectionAfterExhaustedLimit({
+        providers: [
+          claude("claude_spent", [
+            ["five_hour", 20],
+            ["monthly_spend", 100],
+          ]),
+          claude("claude_free", [["five_hour", 5]]),
+        ],
+        current: on("claude_spent", "claude-opus-5-5"),
+        nowMs: NOW,
+      }),
+    ).toBeNull();
+    expect(
+      selectionAfterExhaustedLimit({
+        providers: [
+          provider("codex", null, {
+            usageLimits: usageLimits([
+              ["secondary", 30],
+              ["individual", 100],
+            ]),
+          }),
+          provider("codex_free", 10),
+        ],
+        current,
+        nowMs: NOW,
+      }),
+    ).toBeNull();
+  });
 });

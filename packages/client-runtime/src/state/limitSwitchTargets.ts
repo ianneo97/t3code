@@ -6,7 +6,11 @@
  */
 import type { ModelSelection, ServerProvider, ServerProviderUsageWindow } from "@t3tools/contracts";
 
-import { exhaustedUsageWindow, rankLimitSwitchCandidates } from "@t3tools/shared/usageLimitSwitch";
+import {
+  exhaustedUsageWindow,
+  planUsageWindows,
+  rankLimitSwitchCandidates,
+} from "@t3tools/shared/usageLimitSwitch";
 
 import { resolveProviderInstanceDisplayName } from "./providerInstanceDisplay.ts";
 
@@ -60,8 +64,8 @@ export function suggestLimitSwitch(input: {
   );
   if (!source) return null;
   const window =
-    exhaustedUsageWindow(source, input.nowMs) ??
-    source.usageLimits?.windows
+    exhaustedUsageWindow(source, input.current.model, input.nowMs) ??
+    planUsageWindows(source, input.current.model)
       .filter(
         (candidate) =>
           100 - candidate.usedPercent <= LOW_REMAINING_PERCENT &&
