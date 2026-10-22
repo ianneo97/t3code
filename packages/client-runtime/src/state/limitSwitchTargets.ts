@@ -10,6 +10,7 @@ import {
   exhaustedUsageWindow,
   planUsageWindows,
   rankLimitSwitchCandidates,
+  type LimitSwitchInput,
 } from "@t3tools/shared/usageLimitSwitch";
 
 import { resolveProviderInstanceDisplayName } from "./providerInstanceDisplay.ts";
@@ -26,11 +27,9 @@ export interface LimitSwitchTarget {
  * `rankLimitSwitchCandidates`. Pay-per-token accounts are left out here too,
  * so an offer never leads off the plan.
  */
-export function listLimitSwitchTargets(input: {
-  readonly providers: ReadonlyArray<ServerProvider>;
-  readonly current: ModelSelection;
-  readonly nowMs: number;
-}): ReadonlyArray<LimitSwitchTarget> {
+export function listLimitSwitchTargets(
+  input: LimitSwitchInput<ServerProvider>,
+): ReadonlyArray<LimitSwitchTarget> {
   return rankLimitSwitchCandidates(input).map((candidate) => ({
     selection: candidate.selection,
     label: resolveProviderInstanceDisplayName(candidate.provider),
@@ -54,11 +53,9 @@ export interface LimitSwitchSuggestion {
  * account can take over. A provider that keeps running past its allowance, as
  * Codex does on credits, never fails the turn, so the window is the only signal.
  */
-export function suggestLimitSwitch(input: {
-  readonly providers: ReadonlyArray<ServerProvider>;
-  readonly current: ModelSelection;
-  readonly nowMs: number;
-}): LimitSwitchSuggestion | null {
+export function suggestLimitSwitch(
+  input: LimitSwitchInput<ServerProvider>,
+): LimitSwitchSuggestion | null {
   const source = input.providers.find(
     (provider) => provider.instanceId === input.current.instanceId,
   );

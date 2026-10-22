@@ -1,14 +1,41 @@
 import {
+  ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   type ModelSelection,
   type ServerProvider,
 } from "@t3tools/contracts";
+import type { LimitSwitchInput } from "@t3tools/shared/usageLimitSwitch";
 import { describe, expect, it } from "vite-plus/test";
 
-import { listLimitSwitchTargets, suggestLimitSwitch } from "./limitSwitchTargets.ts";
+import * as LimitSwitchTargets from "./limitSwitchTargets.ts";
 
 const NOW = Date.parse("2026-10-10T12:00:00.000Z");
+const PROJECT = ProjectId.make("project:test");
+
+type TestInput = Omit<LimitSwitchInput<ServerProvider>, "project"> & {
+  readonly project?: LimitSwitchInput["project"];
+};
+
+/** Every listed account is switched on for the machine unless the test passes `project`. */
+function withProject(input: TestInput): LimitSwitchInput<ServerProvider> {
+  return {
+    project: {
+      settings: {
+        providerInstances: Object.fromEntries(
+          input.providers.map((entry) => [entry.instanceId, { driver: entry.driver }]),
+        ),
+        projectSettingsOverrides: {},
+      },
+      projectId: PROJECT,
+    },
+    ...input,
+  };
+}
+const listLimitSwitchTargets = (input: TestInput) =>
+  LimitSwitchTargets.listLimitSwitchTargets(withProject(input));
+const suggestLimitSwitch = (input: TestInput) =>
+  LimitSwitchTargets.suggestLimitSwitch(withProject(input));
 
 function provider(
   instanceId: string,
@@ -122,6 +149,29 @@ describe("listLimitSwitchTargets", () => {
         provider("codex_plan", { usageLimits: usage(60) }),
       ]),
     ).toEqual(["codex_plan"]);
+  });
+
+  it("never offers an account switched off for the thread's project, as the server would refuse it", () => {
+    const providers = [provider("codex"), provider("codex_off"), provider("codex_on")];
+    const { project } = withProject({ providers, current, nowMs: NOW });
+    expect(
+      listLimitSwitchTargets({
+        providers,
+        current,
+        project: {
+          ...project,
+          settings: {
+            ...project.settings,
+            projectSettingsOverrides: {
+              [PROJECT]: {
+                providerInstances: { [ProviderInstanceId.make("codex_off")]: { enabled: false } },
+              },
+            },
+          },
+        },
+        nowMs: NOW,
+      }).map((target) => target.selection.instanceId),
+    ).toEqual(["codex_on"]);
   });
 
   it("puts the same continuation group first, then the most headroom", () => {

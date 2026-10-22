@@ -5,7 +5,14 @@
  *
  * @module usageLimitSwitch
  */
-import type { ModelSelection, ServerProvider, ServerProviderUsageWindow } from "@t3tools/contracts";
+import {
+  resolveProjectProviderInstanceEnabled,
+  type ModelSelection,
+  type ProjectId,
+  type ServerProvider,
+  type ServerProviderUsageWindow,
+  type ServerSettings,
+} from "@t3tools/contracts";
 
 type SwitchProvider = Pick<
   ServerProvider,
@@ -20,6 +27,20 @@ type SwitchProvider = Pick<
   | "continuation"
   | "usageLimits"
 >;
+
+export interface LimitSwitchInput<P extends SwitchProvider = SwitchProvider> {
+  readonly providers: ReadonlyArray<P>;
+  readonly current: ModelSelection;
+  /**
+   * The thread's project. The dispatch rejects an account switched off there,
+   * and the snapshot's `enabled` means "on in any project", so this decides.
+   */
+  readonly project: {
+    readonly settings: Pick<ServerSettings, "providerInstances" | "projectSettingsOverrides">;
+    readonly projectId: ProjectId | null;
+  };
+  readonly nowMs: number;
+}
 
 // Spend budgets bill past the plan instead of ending it: Claude's extra-usage
 // `monthly_spend` and Codex's `individual` monthly credit limit.
@@ -98,11 +119,9 @@ export interface LimitSwitchCandidate<P extends SwitchProvider> {
  * since they resume the native thread; after that, the most headroom wins,
  * then the instance id so the order is stable.
  */
-export function rankLimitSwitchCandidates<P extends SwitchProvider>(input: {
-  readonly providers: ReadonlyArray<P>;
-  readonly current: ModelSelection;
-  readonly nowMs: number;
-}): ReadonlyArray<LimitSwitchCandidate<P>> {
+export function rankLimitSwitchCandidates<P extends SwitchProvider>(
+  input: LimitSwitchInput<P>,
+): ReadonlyArray<LimitSwitchCandidate<P>> {
   const source = input.providers.find(
     (provider) => provider.instanceId === input.current.instanceId,
   );
@@ -115,7 +134,12 @@ export function rankLimitSwitchCandidates<P extends SwitchProvider>(input: {
       !provider.installed ||
       provider.availability === "unavailable" ||
       provider.status !== "ready" ||
-      provider.auth.status !== "authenticated"
+      provider.auth.status !== "authenticated" ||
+      !resolveProjectProviderInstanceEnabled(
+        input.project.settings,
+        input.project.projectId,
+        provider.instanceId,
+      )
     ) {
       return [];
     }
@@ -153,11 +177,7 @@ export function rankLimitSwitchCandidates<P extends SwitchProvider>(input: {
  * account has used up a window and another account can take the turn. Null
  * when the account still has allowance or nobody can take over.
  */
-export function selectionAfterExhaustedLimit(input: {
-  readonly providers: ReadonlyArray<SwitchProvider>;
-  readonly current: ModelSelection;
-  readonly nowMs: number;
-}): ModelSelection | null {
+export function selectionAfterExhaustedLimit(input: LimitSwitchInput): ModelSelection | null {
   const source = input.providers.find(
     (provider) => provider.instanceId === input.current.instanceId,
   );

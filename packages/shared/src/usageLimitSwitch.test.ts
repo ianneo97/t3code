@@ -1,4 +1,5 @@
 import {
+  ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   type ModelSelection,
@@ -6,9 +7,32 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { selectionAfterExhaustedLimit } from "./usageLimitSwitch.ts";
+import * as UsageLimitSwitch from "./usageLimitSwitch.ts";
 
 const NOW = Date.parse("2026-10-10T12:00:00.000Z");
+const PROJECT = ProjectId.make("project:test");
+
+function machineSettings(providers: ReadonlyArray<ServerProvider>) {
+  return {
+    providerInstances: Object.fromEntries(
+      providers.map((entry) => [entry.instanceId, { driver: entry.driver }]),
+    ),
+    projectSettingsOverrides: {},
+  };
+}
+
+/** Every listed account is switched on for the machine unless the test passes `project`. */
+function selectionAfterExhaustedLimit(
+  input: Omit<UsageLimitSwitch.LimitSwitchInput, "project" | "providers"> & {
+    readonly providers: ReadonlyArray<ServerProvider>;
+    readonly project?: UsageLimitSwitch.LimitSwitchInput["project"];
+  },
+) {
+  return UsageLimitSwitch.selectionAfterExhaustedLimit({
+    project: { settings: machineSettings(input.providers), projectId: PROJECT },
+    ...input,
+  });
+}
 
 function provider(
   instanceId: string,
@@ -216,5 +240,32 @@ describe("selectionAfterExhaustedLimit", () => {
         nowMs: NOW,
       }),
     ).toBeNull();
+  });
+
+  it("never picks an account switched off for the thread's project", () => {
+    const providers = [
+      provider("codex", 100),
+      provider("codex_free", 10),
+      provider("codex_busy", 60),
+    ];
+    const settings = machineSettings(providers);
+    expect(
+      selectionAfterExhaustedLimit({
+        providers,
+        current,
+        project: {
+          settings: {
+            ...settings,
+            projectSettingsOverrides: {
+              [PROJECT]: {
+                providerInstances: { [ProviderInstanceId.make("codex_free")]: { enabled: false } },
+              },
+            },
+          },
+          projectId: PROJECT,
+        },
+        nowMs: NOW,
+      }),
+    ).toEqual({ ...current, instanceId: "codex_busy" });
   });
 });

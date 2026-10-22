@@ -2687,6 +2687,8 @@ export default function ChatView(props: ChatViewProps) {
   });
   // `nowMinute` is a UTC minute; ranking at that clock keeps render pure.
   const limitSwitchNowMs = Date.parse(`${nowMinute}:00.000Z`);
+  // The settings carry the per-project switch-offs the server checks before it takes a turn.
+  const limitSwitchSettings = serverConfig?.settings ?? null;
   const limitRecoveryBanner =
     serverRuntime?.status === "failed" &&
     serverRuntime.lastErrorClass === "usage_limit" &&
@@ -2704,11 +2706,18 @@ export default function ChatView(props: ChatViewProps) {
             });
             if (result._tag === "Failure") throw squashAtomCommandFailure(result);
           },
-          switchTargets: listLimitSwitchTargets({
-            providers: providerStatuses,
-            current: activeThreadShell.modelSelection,
-            nowMs: limitSwitchNowMs,
-          }),
+          switchTargets:
+            limitSwitchSettings === null
+              ? []
+              : listLimitSwitchTargets({
+                  providers: providerStatuses,
+                  current: activeThreadShell.modelSelection,
+                  project: {
+                    settings: limitSwitchSettings,
+                    projectId: activeThreadShell.projectId,
+                  },
+                  nowMs: limitSwitchNowMs,
+                }),
           onSwitch: switchFromLimitRecoveryBanner,
         })
       : null;
@@ -2717,10 +2726,14 @@ export default function ChatView(props: ChatViewProps) {
   );
   // The failed-turn banner already offers the same accounts, so this one waits for it to clear.
   const limitSwitchSuggestion =
-    limitRecoveryBanner === null && activeThread && activeProviderInstanceId !== null
+    limitRecoveryBanner === null &&
+    activeThread &&
+    activeProviderInstanceId !== null &&
+    limitSwitchSettings !== null
       ? suggestLimitSwitch({
           providers: providerStatuses,
           current: { ...activeThread.modelSelection, instanceId: activeProviderInstanceId },
+          project: { settings: limitSwitchSettings, projectId: activeThread.projectId },
           nowMs: limitSwitchNowMs,
         })
       : null;
